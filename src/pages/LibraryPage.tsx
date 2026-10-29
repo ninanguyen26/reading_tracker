@@ -3,7 +3,8 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Book } from '../lib/db'
 import { addBook, deleteBook, filterBooks, sortBooks, type SortKey } from '../lib/library'
 import BookCard from '../components/BookCard'
-import { CloseIcon, PlusIcon, SearchIcon, UploadIcon } from '../components/icons'
+import { CloseIcon, MoreIcon, PlusIcon, SearchIcon, UploadIcon } from '../components/icons'
+import type { RestoreSummary } from '../lib/backup'
 
 const SORT_LABELS: Record<SortKey, string> = {
   recent: 'Recently read',
@@ -29,7 +30,54 @@ export default function LibraryPage() {
   const [uploading, setUploading] = useState<string[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [dragging, setDragging] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const restoreRef = useRef<HTMLInputElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const close = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('pointerdown', close)
+    return () => document.removeEventListener('pointerdown', close)
+  }, [menuOpen])
+
+  // The zip library is loaded only when backing up or restoring.
+  const backUp = async () => {
+    setMenuOpen(false)
+    setBusy('Preparing backup…')
+    try {
+      const { createBackup, backupFileName } = await import('../lib/backup')
+      const blob = await createBackup()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = backupFileName()
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setNotice('Backup saved. Keep it somewhere safe, like cloud storage, to restore on another device.')
+    } catch (err) {
+      setErrors(e => [...e, `Backup failed: ${err instanceof Error ? err.message : String(err)}`])
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const restore = async (file: File) => {
+    setBusy(`Restoring from ${file.name}…`)
+    try {
+      const { restoreBackup } = await import('../lib/backup')
+      setNotice(describeRestore(await restoreBackup(file)))
+    } catch (err) {
+      setErrors(e => [...e, err instanceof Error && err.name === 'InvalidBackupError' ? err.message : `Restore failed: ${err instanceof Error ? err.message : String(err)}`])
+    } finally {
+      setBusy(null)
+    }
+  }
 
   const percentById = useMemo(
     () => new Map(progress?.map(p => [p.bookId, p.percent])),
@@ -131,13 +179,50 @@ export default function LibraryPage() {
               </label>
             </>
           )}
+          <div className="flex items-center gap-1">
           <button
             type="button"
             onClick={openPicker}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-stone-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-stone-700 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
+            className="inline-flex items-center gap-1.5 rounded-lg bg-stone-900 px-2.5 py-1.5 text-sm font-medium text-white hover:bg-stone-700 sm:px-3 dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-white"
           >
-            <PlusIcon size={16} /> Add books
+            <PlusIcon size={16} /> <span className="max-sm:sr-only">Add books</span>
           </button>
+          <div className="relative" ref={menuRef}>
+            <button
+              type="button"
+              onClick={() => setMenuOpen(o => !o)}
+              className="rounded-lg p-1.5 text-stone-600 hover:bg-stone-200 dark:text-stone-300 dark:hover:bg-stone-800"
+              aria-label="Library options"
+              aria-expanded={menuOpen}
+            >
+              <MoreIcon size={20} />
+            </button>
+            {menuOpen && (
+              <div role="menu" className="absolute top-full right-0 z-20 mt-1 w-56 rounded-lg border border-stone-200 bg-white p-1.5 text-sm shadow-lg dark:border-stone-700 dark:bg-stone-900">
+                <button type="button" role="menuitem" onClick={backUp} disabled={!books?.length}
+                  className="w-full rounded px-2 py-1.5 text-left hover:bg-stone-100 disabled:opacity-40 dark:hover:bg-stone-800">
+                  Back up library
+                </button>
+                <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); restoreRef.current?.click() }}
+                  className="w-full rounded px-2 py-1.5 text-left hover:bg-stone-100 dark:hover:bg-stone-800">
+                  Restore from backup…
+                </button>
+              </div>
+            )}
+          </div>
+          </div>
+          <input
+            ref={restoreRef}
+            type="file"
+            accept=".zip,application/zip"
+            hidden
+            data-testid="restore-input"
+            onChange={e => {
+              const file = e.target.files?.[0]
+              if (file) restore(file)
+              e.target.value = ''
+            }}
+          />
           <input
             ref={inputRef}
             type="file"
@@ -154,8 +239,22 @@ export default function LibraryPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 pt-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))] sm:px-6">
-        {(uploading.length > 0 || errors.length > 0) && (
+        {(uploading.length > 0 || errors.length > 0 || notice || busy) && (
           <div className="mb-5 space-y-2" aria-live="polite">
+            {busy && (
+              <p className="flex items-center gap-2 text-sm text-stone-600 dark:text-stone-400">
+                <span className="size-3 animate-spin rounded-full border-2 border-amber-600 border-t-transparent" />
+                {busy}
+              </p>
+            )}
+            {notice && (
+              <p role="status" className="flex items-center justify-between gap-3 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                {notice}
+                <button type="button" aria-label="Dismiss" onClick={() => setNotice(null)}>
+                  <CloseIcon size={16} />
+                </button>
+              </p>
+            )}
             {uploading.map(name => (
               <p key={name} className="flex items-center gap-2 text-sm text-stone-600 dark:text-stone-400">
                 <span className="size-3 animate-spin rounded-full border-2 border-amber-600 border-t-transparent" />
@@ -187,6 +286,14 @@ export default function LibraryPage() {
             </span>
           </button>
         )}
+        {empty && (
+          <p className="mt-4 text-center text-sm text-stone-500 dark:text-stone-400">
+            Moving from another device?{' '}
+            <button type="button" onClick={() => restoreRef.current?.click()} className="font-medium text-amber-700 underline dark:text-amber-500">
+              Restore from a backup
+            </button>
+          </p>
+        )}
 
         {!loading && !empty && visible.length === 0 && (
           <p className="mt-10 text-center text-stone-500">No books match “{query}”.</p>
@@ -210,4 +317,14 @@ export default function LibraryPage() {
       )}
     </div>
   )
+}
+
+function describeRestore({ booksAdded, booksSkipped, highlightsAdded, bookmarksAdded }: RestoreSummary): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
+  const parts = [plural(booksAdded, 'book')]
+  if (highlightsAdded) parts.push(plural(highlightsAdded, 'highlight'))
+  if (bookmarksAdded) parts.push(plural(bookmarksAdded, 'bookmark'))
+  const added = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
+  const skipped = booksSkipped ? ` ${plural(booksSkipped, 'book')} ${booksSkipped === 1 ? 'was' : 'were'} already in your library.` : ''
+  return `Restored ${added}.${skipped}`
 }

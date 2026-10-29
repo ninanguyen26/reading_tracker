@@ -1,6 +1,7 @@
 import { db, type Book, type Bookmark, type Highlight, type Progress, type ReaderSettings } from './db'
 import { detectFormat, extractMetadata, type BookMetadata } from './metadata'
 import type { BookFormat } from './db'
+import { EMPTY_STATS, type ReadingStats } from './readingSpeed'
 
 export class UnsupportedFileError extends Error {
   constructor(fileName: string) {
@@ -35,7 +36,7 @@ export async function addBook(file: File, extract: Extractor = extractMetadata):
     await db.files.add({ bookId: book.id, blob: file })
   })
   // Ask the browser not to evict the library when storage runs low.
-  navigator.storage?.persist?.().catch(() => {})
+  globalThis.navigator?.storage?.persist?.().catch(() => {})
   return book
 }
 
@@ -112,11 +113,20 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
 
 export async function getSettings(): Promise<ReaderSettings> {
   const row = await db.settings.get('reader')
-  return { ...DEFAULT_SETTINGS, ...row?.value }
+  return { ...DEFAULT_SETTINGS, ...(row?.key === 'reader' ? row.value : undefined) }
 }
 
 export async function saveSettings(value: ReaderSettings): Promise<void> {
   await db.settings.put({ key: 'reader', value })
+}
+
+export async function getReadingStats(): Promise<ReadingStats> {
+  const row = await db.settings.get('reading-stats')
+  return row?.key === 'reading-stats' ? { ...EMPTY_STATS, ...row.value } : EMPTY_STATS
+}
+
+export async function saveReadingStats(value: ReadingStats): Promise<void> {
+  await db.settings.put({ key: 'reading-stats', value })
 }
 
 // ---------- Sorting and search ----------

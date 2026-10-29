@@ -47,7 +47,13 @@ declare module 'foliate-js/view.js' {
     getCFI: (index: number, range?: Range) => string
     addAnnotation: (annotation: { value: string; color?: string }) => Promise<unknown>
     deleteAnnotation: (annotation: { value: string }) => Promise<unknown>
+    search: (opts: { query: string; index?: number }) => AsyncGenerator<SearchResult | 'done'>
+    clearSearch: () => void
   }
+
+  export type SearchResult =
+    | { progress: number }
+    | { label: string; subitems: { cfi: string; excerpt: { pre: string; match: string; post: string } }[] }
 
   export function makeBook(file: File | Blob | string): Promise<FoliateBook>
 }

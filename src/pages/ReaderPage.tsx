@@ -7,25 +7,41 @@ import {
   removeHighlight, saveProgress, saveSettings, sortHighlights, updateHighlight,
 } from '../lib/library'
 import { downloadNotes } from '../lib/exportNotes'
-import type { ReaderHandle, ReaderLocation, TextSelection, TocEntry } from '../reader/types'
+import { EMPTY_SEARCH, type ReaderHandle, type ReaderLocation, type SearchMatch, type SearchState, type TextSelection, type TocEntry } from '../reader/types'
 import NavigationPanel, { type NavigationTab } from '../reader/NavigationPanel'
 import SettingsPanel from '../reader/SettingsPanel'
 import DictionarySheet from '../reader/DictionarySheet'
 import SelectionBar from '../reader/SelectionBar'
 import HighlightSheet from '../reader/HighlightSheet'
 import { singleWord } from '../reader/selection'
-import { BackIcon, BookmarkIcon, TextIcon, TocIcon, ZoomInIcon, ZoomOutIcon } from '../components/icons'
+import SearchPanel from '../reader/SearchPanel'
+import { useReadingTime } from '../reader/useReadingTime'
+import { formatDuration } from '../lib/readingSpeed'
+import { BackIcon, BookmarkIcon, CloseIcon, SearchIcon, TextIcon, TocIcon, ZoomInIcon, ZoomOutIcon } from '../components/icons'
 
 const EpubView = lazy(() => import('../reader/EpubView'))
 const PdfView = lazy(() => import('../reader/PdfView'))
 
-type Panel = NavigationTab | 'settings' | null
+type Panel = NavigationTab | 'settings' | 'search' | null
 type LoadState =
   | { status: 'loading' }
   | { status: 'missing' }
   | { status: 'ready'; file: Blob; initialLocation: string | null; settings: ReaderSettings }
 
 const ZOOM_STEPS = [1, 1.25, 1.5, 2, 2.5, 3]
+
+// Like a Kindle, tapping the footer cycles what it shows.
+const FOOTER_MODES = ['location', 'chapter', 'book'] as const
+type FooterMode = (typeof FOOTER_MODES)[number]
+const FOOTER_MODE_KEY = 'footer-mode'
+
+function loadFooterMode(): FooterMode {
+  try {
+    const saved = localStorage.getItem(FOOTER_MODE_KEY)
+    if (FOOTER_MODES.includes(saved as FooterMode)) return saved as FooterMode
+  } catch { /* storage unavailable */ }
+  return 'location'
+}
 
 export default function ReaderPage() {
   const { bookId = '' } = useParams()
@@ -48,6 +64,9 @@ export default function ReaderPage() {
   const [selection, setSelection] = useState<TextSelection | null>(null)
   const [editing, setEditing] = useState<{ id: string; focusNote: boolean } | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [searchDraft, setSearchDraft] = useState('')
+  const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH)
+  const searchAbort = useRef<AbortController | null>(null)
   const readerRef = useRef<ReaderHandle>(null)
 
   // Load the file, saved position and settings once per book.
@@ -65,6 +84,21 @@ export default function ReaderPage() {
     })()
     return () => { cancelled = true }
   }, [bookId])
+
+  const timeLeft = useReadingTime(location)
+  const [footerMode, setFooterMode] = useState<FooterMode>(loadFooterMode)
+  const cycleFooter = () => {
+    const next = FOOTER_MODES[(FOOTER_MODES.indexOf(footerMode) + 1) % FOOTER_MODES.length]
+    setFooterMode(next)
+    try { localStorage.setItem(FOOTER_MODE_KEY, next) } catch { /* ignore */ }
+  }
+  const footerText = (() => {
+    if (!location) return ''
+    const percent = `${Math.round(location.percent * 100)}%`
+    if (timeLeft && footerMode === 'chapter') return `${formatDuration(timeLeft.chapter)} left in chapter · ${percent}`
+    if (timeLeft && footerMode === 'book') return `${formatDuration(timeLeft.book)} left in book · ${percent}`
+    return location.label ? `${location.label} · ${percent}` : percent
+  })()
 
   // Save the reading position shortly after it settles, and on leaving the page.
   const pending = useRef<ReaderLocation | null>(null)
@@ -163,6 +197,31 @@ export default function ReaderPage() {
     setPanel(null)
     setEditing({ id: h.id, focusNote: false })
   }
+  // ---------- Search ----------
+  const runSearch = async (query: string) => {
+    searchAbort.current?.abort()
+    const controller = new AbortController()
+    searchAbort.current = controller
+    readerRef.current?.clearSearch()
+    setSearch({ query, groups: [], progress: 0, status: 'searching' })
+    await readerRef.current?.search(query, {
+      onProgress: progress => !controller.signal.aborted && setSearch(s => ({ ...s, progress })),
+      onGroup: group => !controller.signal.aborted && setSearch(s => ({ ...s, groups: [...s.groups, group] })),
+    }, controller.signal)
+    if (!controller.signal.aborted) setSearch(s => ({ ...s, status: 'done', progress: 1 }))
+  }
+  const clearSearch = () => {
+    searchAbort.current?.abort()
+    readerRef.current?.clearSearch()
+    setSearch(EMPTY_SEARCH)
+    setSearchDraft('')
+  }
+  const goToMatch = (match: SearchMatch) => {
+    readerRef.current?.goTo(match.location)
+    setPanel(null)
+  }
+  useEffect(() => () => searchAbort.current?.abort(), [])
+
   const editingHighlight = editing ? highlights.find(h => h.id === editing.id) : undefined
 
   const handleKey = useCallback((e: KeyboardEvent) => {
@@ -217,6 +276,7 @@ export default function ReaderPage() {
     initialLocation: load.initialLocation,
     settings,
     highlights,
+    searchQuery: search.query,
     onReady: setToc,
     onError: setError,
     onRelocate: setLocation,
@@ -252,6 +312,9 @@ export default function ReaderPage() {
               </button>
             </>
           )}
+          <button type="button" className={iconButton} aria-label="Search this book" onClick={() => setPanel('search')} disabled={!location}>
+            <SearchIcon />
+          </button>
           <button type="button" className={iconButton} aria-label="Contents, bookmarks and notes" onClick={() => setPanel('contents')}>
             <TocIcon />
           </button>
@@ -299,13 +362,41 @@ export default function ReaderPage() {
         )}
         <div className="flex items-center justify-between gap-4 pt-1">
           <span className="truncate">{location?.chapter ?? ''}</span>
-          <span className="shrink-0 tabular-nums">
-            {location ? `${location.label}${location.label ? ' · ' : ''}${Math.round(location.percent * 100)}%` : ''}
-          </span>
+          <button
+            type="button"
+            onClick={cycleFooter}
+            className="-my-1 shrink-0 rounded px-1 py-1 tabular-nums hover:text-[var(--reader-fg)]"
+            aria-label={`${footerText}. Tap to change`}
+            data-testid="footer-progress"
+          >
+            {footerText}
+          </button>
         </div>
       </footer>
 
-      {panel && panel !== 'settings' && (
+      {panel === 'search' && (
+        <SearchPanel
+          draft={searchDraft}
+          onDraft={setSearchDraft}
+          search={search}
+          onSearch={runSearch}
+          onClear={clearSearch}
+          onSelect={goToMatch}
+          onClose={() => setPanel(null)}
+        />
+      )}
+      {/* While a search is active, a chip leads back to the results. */}
+      {search.status !== 'idle' && panel !== 'search' && (
+        <div className={`fixed left-1/2 z-20 flex -translate-x-1/2 items-center rounded-full border border-[var(--reader-border)] bg-[var(--reader-panel)] text-xs shadow transition-[top] ${chrome ? 'top-[calc(3.75rem+env(safe-area-inset-top))]' : 'top-[calc(0.5rem+env(safe-area-inset-top))]'}`}>
+          <button type="button" onClick={() => setPanel('search')} className="flex items-center gap-1.5 py-1.5 pr-1 pl-3">
+            <SearchIcon size={14} /> Results for “{search.query}”
+          </button>
+          <button type="button" onClick={clearSearch} className="rounded-full p-1.5 hover:bg-[var(--reader-border)]" aria-label="Clear search">
+            <CloseIcon size={14} />
+          </button>
+        </div>
+      )}
+      {panel && panel !== 'settings' && panel !== 'search' && (
         <NavigationPanel
           tab={panel}
           onTab={setPanel}

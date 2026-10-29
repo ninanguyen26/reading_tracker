@@ -5,6 +5,7 @@ import type { Theme } from '../lib/db'
 import { HIGHLIGHT_COLORS } from './highlightColors'
 import { hitsRects, toPageRects } from './pdfHighlights'
 import { pageToPercent } from './pdfProgress'
+import { containsQuery, findMatches } from './textSearch'
 import { tapZone } from './selection'
 import type { ReaderHandle, RendererProps, TocEntry } from './types'
 
@@ -46,6 +47,20 @@ async function resolveOutline(doc: PDFDocumentProxy, nodes: OutlineNode[]): Prom
   return entries
 }
 
+/** First page of the chapter after the one `page` is in, or one past the last page. */
+function nextChapterPage(toc: TocEntry[], page: number, total: number): number {
+  let next = total + 1
+  const walk = (items: TocEntry[]) => {
+    for (const item of items) {
+      const start = Number(item.target)
+      if (start > page && start < next) next = start
+      walk(item.subitems)
+    }
+  }
+  walk(toc)
+  return next
+}
+
 /** The outline entry that the given page falls under, if any. */
 function chapterFor(toc: TocEntry[], page: number): string | null {
   let found: string | null = null
@@ -72,6 +87,7 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
   const [page, setPage] = useState(1)
   const [size, setSize] = useState({ width: 0, height: 0 })
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 })
+  const [textLayerVersion, setTextLayerVersion] = useState(0)
 
   const total = doc?.numPages ?? 1
   const goToPage = (n: number) => setPage(Math.min(Math.max(1, Math.round(n)), total))
@@ -91,7 +107,36 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       const selection = document.getSelection()
       if (selection?.anchorNode && textLayerRef.current?.contains(selection.anchorNode)) selection.removeAllRanges()
     },
+    search: async (query, { onProgress, onGroup }, signal) => {
+      if (!doc) return
+      for (let n = 1; n <= doc.numPages; n++) {
+        if (signal.aborted) return
+        const matches = findMatches(await pageText(doc, n), query)
+        if (signal.aborted) return
+        if (matches.length) {
+          const chapter = chapterFor(toc, n)
+          onGroup({
+            label: chapter ? `${chapter} · Page ${n}` : `Page ${n}`,
+            matches: matches.map(excerpt => ({ location: String(n), excerpt })),
+          })
+        }
+        onProgress(n / doc.numPages)
+      }
+    },
+    // Matches are marked from the searchQuery prop, so there is nothing else to clear.
+    clearSearch: () => {},
   }))
+
+  // Page text is extracted once per page and reused by later searches.
+  const pageTexts = useRef(new Map<number, string>())
+  const pageText = async (pdf: PDFDocumentProxy, n: number) => {
+    const cached = pageTexts.current.get(n)
+    if (cached !== undefined) return cached
+    const content = await (await pdf.getPage(n)).getTextContent()
+    const text = content.items.map(item => ('str' in item ? item.str + (item.hasEOL ? '\n' : '') : '')).join('')
+    pageTexts.current.set(n, text)
+    return text
+  }
 
   // Open the document.
   useEffect(() => {
@@ -140,6 +185,13 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       percent: pageToPercent(page, doc.numPages),
       chapter: chapterFor(toc, page),
       label: `Page ${page} of ${doc.numPages}`,
+      // The current page counts as still to read.
+      remaining: {
+        unit: 'pdf-pages',
+        chapter: nextChapterPage(toc, page, doc.numPages) - page,
+        book: doc.numPages - page + 1,
+        position: page,
+      },
     })
     scrollerRef.current?.scrollTo({ top: 0, left: 0 })
   }, [doc, page, toc])
@@ -175,6 +227,7 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       container.style.setProperty('--total-scale-factor', String(viewport.scale))
       textLayer = new pdfjs.TextLayer({ textContentSource: pdfPage.streamTextContent(), container, viewport })
       await textLayer.render().catch(() => {})
+      if (!cancelled) setTextLayerVersion(v => v + 1)
     })()
     return () => {
       cancelled = true
@@ -182,6 +235,14 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       textLayer?.cancel()
     }
   }, [doc, page, size, zoom])
+
+  // Mark text-layer pieces that contain the search query.
+  useEffect(() => {
+    const spans = textLayerRef.current?.querySelectorAll<HTMLElement>('span:not(.markedContent)') ?? []
+    for (const span of spans) {
+      span.classList.toggle('search-hit', containsQuery(span.textContent ?? '', props.searchQuery))
+    }
+  }, [props.searchQuery, textLayerVersion])
 
   // Report text selected in the text layer, with its position on the page.
   const position = useRef({ page, toc, total })

@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from 'dexie'
+import type { ReadingStats } from './readingSpeed'
 
 export type BookFormat = 'epub' | 'pdf'
 
@@ -78,10 +79,9 @@ export interface ReaderSettings {
   theme: Theme
 }
 
-interface SettingsRow {
-  key: 'reader'
-  value: ReaderSettings
-}
+type SettingsRow =
+  | { key: 'reader'; value: ReaderSettings }
+  | { key: 'reading-stats'; value: ReadingStats }
 
 export const db = new Dexie('reading-tracker') as Dexie & {
   books: EntityTable<Book, 'id'>

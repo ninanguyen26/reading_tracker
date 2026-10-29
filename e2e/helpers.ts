@@ -9,7 +9,8 @@ export const PDF_TITLE = 'Field Notes'
 export async function addBooks(page: Page, ...files: string[]) {
   await page.goto('/')
   await page.getByTestId('file-input').setInputFiles(files)
-  await expect(page.getByTestId('book-card')).toHaveCount(files.length)
+  // Reading metadata and rendering covers can be slow when many tests run at once.
+  await expect(page.getByTestId('book-card')).toHaveCount(files.length, { timeout: 15_000 })
 }
 
 export async function openBook(page: Page, title: string) {

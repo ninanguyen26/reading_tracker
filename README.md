@@ -9,12 +9,15 @@ A Kindle-style reader for your own EPUB and PDF books. It runs entirely in the b
 - Title, author and cover are read from the file
 - Search by title or author; sort by recently read, recently added, title or author
 - Progress bar on every book; delete with confirmation
+- **Back up** the whole library (books, positions, bookmarks, highlights, notes, settings) to one `.zip` file from the ⋯ menu, and **restore** it on another device or browser. Restoring merges: books already in the library are kept, and only newer positions and notes replace older ones.
 
 **Reading**
 - Page turns with tap zones (left/right third of the screen), swipes, or the arrow keys / Page Up / Page Down / Space
 - Tap the middle of the page to show or hide the toolbars
 - Opens exactly where you left off
 - Table of contents (EPUB navigation or PDF outline) and a position slider
+- **Search inside the book**: results stream in chapter by chapter with the match in context; matches are outlined on the page, and a chip leads back to the results
+- **Time left**: tap the progress text in the footer to cycle between location, time left in the chapter, and time left in the book. Estimates start from an average reading speed and adapt to yours as you turn pages (jumps and time away don't count)
 - Bookmarks: add, list, jump to, and remove
 
 **Highlights and notes**

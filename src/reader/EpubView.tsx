@@ -4,7 +4,7 @@ import type { Highlight, HighlightColor } from '../lib/db'
 import { buildEpubCss } from './epubStyles'
 import { HIGHLIGHT_COLORS } from './highlightColors'
 import { tapZone } from './selection'
-import type { ReaderHandle, RendererProps, TocEntry } from './types'
+import type { ReaderHandle, Remaining, RendererProps, TocEntry } from './types'
 
 const toEntries = (items: TocItem[] | null | undefined): TocEntry[] =>
   (items ?? []).map(item => ({ label: item.label?.trim() || 'Untitled', target: item.href, subitems: toEntries(item.subitems) }))
@@ -34,6 +34,23 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
       selectionDoc.current?.getSelection()?.removeAllRanges()
       selectionDoc.current = null
     },
+    search: async (query, { onProgress, onGroup }, signal) => {
+      const view = viewRef.current
+      if (!view) return
+      // foliate-js outlines every match on the page while the search is active.
+      for await (const result of view.search({ query })) {
+        if (signal.aborted) break
+        if (result === 'done') break
+        if ('progress' in result && result.progress != null) onProgress(result.progress)
+        if ('subitems' in result && result.subitems) {
+          onGroup({
+            label: result.label?.trim() || 'Untitled',
+            matches: result.subitems.map(item => ({ location: item.cfi, excerpt: item.excerpt })),
+          })
+        }
+      }
+    },
+    clearSearch: () => viewRef.current?.clearSearch(),
   }), [])
 
   useEffect(() => {
@@ -108,6 +125,7 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
             percent: Number.isFinite(d.fraction) ? d.fraction : 0,
             chapter: d.tocItem?.label?.trim() || null,
             label: loc ? `Location ${loc.current + 1} of ${loc.total}` : '',
+            remaining: loc && d.time ? toRemaining(loc.total, d.time) : undefined,
           })
         })
         // A chapter was (re)rendered: draw its highlights.
@@ -172,6 +190,22 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
 
   return <div ref={containerRef} className="h-full w-full" data-testid="epub-view" />
 })
+
+// foliate-js measures progress in bytes of text: a "location" is 1500 bytes
+// and its time unit is 1600 bytes. Converting back to bytes lets this app
+// apply its own measured reading speed.
+const BYTES_PER_LOCATION = 1500
+const BYTES_PER_TIME_UNIT = 1600
+
+function toRemaining(totalLocations: number, time: { section: number; total: number }): Remaining {
+  const book = time.total * BYTES_PER_TIME_UNIT
+  return {
+    unit: 'epub-bytes',
+    chapter: time.section * BYTES_PER_TIME_UNIT,
+    book,
+    position: totalLocations * BYTES_PER_LOCATION - book,
+  }
+}
 
 function applySettings(view: FoliateView, settings: RendererProps['settings']) {
   view.renderer.setStyles?.(buildEpubCss(settings))

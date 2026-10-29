@@ -50,7 +50,8 @@ test('turns pages by tapping the sides', async ({ page }) => {
 
 test('zooms in and out', async ({ page }) => {
   const canvas = page.locator('[data-testid="pdf-view"] canvas')
-  await expect.poll(async () => (await canvas.boundingBox())?.width ?? 0).toBeGreaterThan(0)
+  // Wait for the first render; before it the canvas has its 300px default size.
+  await expect(page.locator('.textLayer')).toContainText('Introduction')
   const base = (await canvas.boundingBox())!.width
   await page.getByRole('button', { name: 'Zoom in' }).click()
   await expect.poll(async () => (await canvas.boundingBox())!.width).toBeCloseTo(base * 1.25, -1)

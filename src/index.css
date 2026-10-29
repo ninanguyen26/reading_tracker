@@ -94,3 +94,7 @@ body {
   inset: 100% 0 0;
   user-select: none;
 }
+.textLayer .search-hit {
+  background: rgb(250 204 21 / 0.45);
+  border-radius: 2px;
+}
