@@ -1,0 +1,96 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased dark:bg-stone-950 dark:text-stone-100;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Reader chrome colors follow the reader theme, not the system theme. */
+.reader[data-theme='light'] {
+  --reader-bg: #ffffff;
+  --reader-fg: #1c1917;
+  --reader-muted: #78716c;
+  --reader-panel: #fafaf9;
+  --reader-border: #e7e5e4;
+  --reader-accent: #b45309;
+  color-scheme: light;
+}
+.reader[data-theme='sepia'] {
+  --reader-bg: #f4ecd8;
+  --reader-fg: #3b2f22;
+  --reader-muted: #8a7458;
+  --reader-panel: #efe4cb;
+  --reader-border: #ddcfae;
+  --reader-accent: #9a5b13;
+  color-scheme: light;
+}
+.reader[data-theme='dark'] {
+  --reader-bg: #121212;
+  --reader-fg: #e7e2d9;
+  --reader-muted: #9b958c;
+  --reader-panel: #1e1e1e;
+  --reader-border: #2f2f2f;
+  --reader-accent: #f0a952;
+  color-scheme: dark;
+}
+.reader {
+  background: var(--reader-bg);
+  color: var(--reader-fg);
+}
+
+/* Minimal pdf.js text layer styles, so PDF text can be selected for the dictionary. */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent {
+  display: contents;
+}
+.textLayer ::selection {
+  background: rgb(59 130 246 / 0.3);
+}
+.textLayer br::selection {
+  background: transparent;
+}
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  user-select: none;
+}
