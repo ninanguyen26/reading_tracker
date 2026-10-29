@@ -4,7 +4,7 @@ declare module 'foliate-js/view.js' {
   export interface TocItem {
     label: string
     href: string
-    subitems?: TocItem[]
+    subitems?: TocItem[] | null
   }
 
   export interface FoliateBook {

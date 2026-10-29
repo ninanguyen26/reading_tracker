@@ -25,3 +25,7 @@ dist-ssr
 
 # Local tool config
 .claude/
+
+# Playwright
+test-results/
+playwright-report/
