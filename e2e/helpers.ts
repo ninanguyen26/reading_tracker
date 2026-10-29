@@ -38,6 +38,28 @@ export function evalInEpub<T>(page: Page, fn: string): Promise<T | null> {
   })()`) as Promise<T | null>
 }
 
+/**
+ * Selects `phrase` inside the first EPUB paragraph that contains it and
+ * returns the page coordinates of the selection's center.
+ */
+export async function selectInEpub(page: Page, phrase: string): Promise<{ x: number; y: number }> {
+  const point = await evalInEpub<{ x: number; y: number }>(page, `doc => {
+    const p = [...doc.querySelectorAll('p')].find(p => p.textContent.includes(${JSON.stringify(phrase)}))
+    const text = p.firstChild
+    const start = text.textContent.indexOf(${JSON.stringify(phrase)})
+    const range = doc.createRange()
+    range.setStart(text, start)
+    range.setEnd(text, start + ${phrase.length})
+    doc.getSelection().removeAllRanges()
+    doc.getSelection().addRange(range)
+    const r = range.getClientRects()[0]
+    const frame = doc.defaultView.frameElement.getBoundingClientRect()
+    return { x: frame.left + r.left + r.width / 2, y: frame.top + r.top + r.height / 2 }
+  }`)
+  if (!point) throw new Error(`Could not select "${phrase}"`)
+  return point
+}
+
 /** Mocks the dictionary APIs so tests don't depend on the network. */
 export async function mockDictionary(page: Page) {
   await page.route('https://api.dictionaryapi.dev/**', route => {

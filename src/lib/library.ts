@@ -1,4 +1,4 @@
-import { db, type Book, type Bookmark, type Progress, type ReaderSettings } from './db'
+import { db, type Book, type Bookmark, type Highlight, type Progress, type ReaderSettings } from './db'
 import { detectFormat, extractMetadata, type BookMetadata } from './metadata'
 import type { BookFormat } from './db'
 
@@ -40,11 +40,12 @@ export async function addBook(file: File, extract: Extractor = extractMetadata):
 }
 
 export async function deleteBook(id: string): Promise<void> {
-  await db.transaction('rw', [db.books, db.files, db.progress, db.bookmarks], async () => {
+  await db.transaction('rw', [db.books, db.files, db.progress, db.bookmarks, db.highlights], async () => {
     await db.books.delete(id)
     await db.files.delete(id)
     await db.progress.delete(id)
     await db.bookmarks.where('bookId').equals(id).delete()
+    await db.highlights.where('bookId').equals(id).delete()
   })
 }
 
@@ -73,6 +74,30 @@ export async function addBookmark(bookmark: Omit<Bookmark, 'id' | 'createdAt'>):
 
 export async function removeBookmark(id: string): Promise<void> {
   await db.bookmarks.delete(id)
+}
+
+// ---------- Highlights ----------
+
+export async function addHighlight(
+  highlight: Omit<Highlight, 'id' | 'createdAt' | 'updatedAt' | 'note'> & { note?: string },
+): Promise<Highlight> {
+  const now = Date.now()
+  const row: Highlight = { note: '', ...highlight, id: newId(), createdAt: now, updatedAt: now }
+  await db.highlights.add(row)
+  return row
+}
+
+export async function updateHighlight(id: string, changes: Partial<Pick<Highlight, 'color' | 'note'>>): Promise<void> {
+  await db.highlights.update(id, { ...changes, updatedAt: Date.now() })
+}
+
+export async function removeHighlight(id: string): Promise<void> {
+  await db.highlights.delete(id)
+}
+
+/** Reading order: by position in the book, then by when they were made. */
+export function sortHighlights(highlights: Highlight[]): Highlight[] {
+  return [...highlights].sort((a, b) => a.percent - b.percent || a.createdAt - b.createdAt)
 }
 
 // ---------- Settings ----------

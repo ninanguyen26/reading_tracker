@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef } from 'react'
 import type { FoliateView, TocItem } from 'foliate-js/view.js'
+import type { Highlight, HighlightColor } from '../lib/db'
 import { buildEpubCss } from './epubStyles'
-import { singleWord, tapZone } from './selection'
+import { HIGHLIGHT_COLORS } from './highlightColors'
+import { tapZone } from './selection'
 import type { ReaderHandle, RendererProps, TocEntry } from './types'
 
 const toEntries = (items: TocItem[] | null | undefined): TocEntry[] =>
@@ -9,26 +11,38 @@ const toEntries = (items: TocItem[] | null | undefined): TocEntry[] =>
 
 // A short delay lets a double-click (to select a word) cancel the single tap.
 const TAP_DELAY = 250
+// Wait for the selection to settle (e.g. while dragging) before showing the toolbar.
+const SELECTION_DELAY = 300
 
 const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props, ref) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewRef = useRef<FoliateView | null>(null)
+  const readyRef = useRef(false)
   // Event handlers live in a ref so the book isn't reopened when a callback changes.
   const latest = useRef(props)
   latest.current = props
+  // Highlights currently drawn, by CFI, with their color.
+  const drawn = useRef(new Map<string, HighlightColor>())
+  const selectionDoc = useRef<Document | null>(null)
 
   useImperativeHandle(ref, () => ({
     next: () => viewRef.current?.goRight(),
     prev: () => viewRef.current?.goLeft(),
     goTo: target => viewRef.current?.goTo(target),
     goToFraction: fraction => viewRef.current?.goToFraction(fraction),
+    clearSelection: () => {
+      selectionDoc.current?.getSelection()?.removeAllRanges()
+      selectionDoc.current = null
+    },
   }), [])
 
   useEffect(() => {
     let cancelled = false
     let view: FoliateView | null = null
+    let suppressTap = false
+    const drawnMap = drawn.current
 
-    const attachToDocument = (doc: Document) => {
+    const attachToDocument = (doc: Document, index: number) => {
       doc.addEventListener('keydown', e => latest.current.onKey(e))
 
       let tapTimer: number | undefined
@@ -37,6 +51,7 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
         const { clientX } = e
         window.clearTimeout(tapTimer)
         tapTimer = window.setTimeout(() => {
+          if (suppressTap) return void (suppressTap = false)
           if (!doc.getSelection()?.isCollapsed) return
           // The frame can be wider than the screen (one column per page), so
           // convert the tap to a position within the visible reader area.
@@ -52,20 +67,39 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
       doc.addEventListener('selectionchange', () => {
         window.clearTimeout(selectTimer)
         selectTimer = window.setTimeout(() => {
-          const word = singleWord(doc.getSelection()?.toString())
-          if (word) latest.current.onSelectWord(word)
-        }, 400)
+          const selection = doc.getSelection()
+          const text = selection?.toString().trim()
+          if (!selection || selection.isCollapsed || !text || !view) {
+            if (selectionDoc.current === doc) {
+              selectionDoc.current = null
+              latest.current.onSelection(null)
+            }
+            return
+          }
+          selectionDoc.current = doc
+          const where = view.lastLocation
+          latest.current.onSelection({
+            text,
+            location: view.getCFI(index, selection.getRangeAt(0)),
+            percent: Number.isFinite(where?.fraction) ? where!.fraction : 0,
+            chapter: where?.tocItem?.label?.trim() || null,
+          })
+        }, SELECTION_DELAY)
       })
     }
 
     ;(async () => {
       try {
         await import('foliate-js/view.js')
+        const { Overlayer } = await import('foliate-js/overlayer.js')
         if (cancelled) return
         view = document.createElement('foliate-view') as FoliateView
         view.style.display = 'block'
         view.style.height = '100%'
-        view.addEventListener('load', e => attachToDocument((e as CustomEvent).detail.doc))
+        view.addEventListener('load', e => {
+          const { doc, index } = (e as CustomEvent).detail
+          attachToDocument(doc, index)
+        })
         view.addEventListener('relocate', e => {
           const d = (e as CustomEvent).detail
           const loc = d.location
@@ -75,6 +109,22 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
             chapter: d.tocItem?.label?.trim() || null,
             label: loc ? `Location ${loc.current + 1} of ${loc.total}` : '',
           })
+        })
+        // A chapter was (re)rendered: draw its highlights.
+        view.addEventListener('create-overlay', () => {
+          for (const h of latest.current.highlights) view?.addAnnotation({ value: h.location, color: h.color })
+        })
+        view.addEventListener('draw-annotation', e => {
+          const { draw, annotation } = (e as CustomEvent).detail
+          const color = HIGHLIGHT_COLORS[annotation.color as HighlightColor] ?? HIGHLIGHT_COLORS.yellow
+          draw(Overlayer.highlight, { color: color.fill })
+        })
+        view.addEventListener('show-annotation', e => {
+          const { value } = (e as CustomEvent).detail
+          const highlight = latest.current.highlights.find(h => h.location === value)
+          if (!highlight) return
+          suppressTap = true
+          latest.current.onHighlightTap(highlight.id)
         })
         containerRef.current?.append(view)
         viewRef.current = view
@@ -91,6 +141,8 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
         applySettings(view, latest.current.settings)
         await view.init({ lastLocation: props.initialLocation ?? undefined, showTextStart: true })
         if (cancelled) return
+        readyRef.current = true
+        syncHighlights(view, latest.current.highlights, drawn.current)
         latest.current.onReady(toEntries(view.book.toc))
       } catch (err) {
         console.error(err)
@@ -100,7 +152,9 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
 
     return () => {
       cancelled = true
+      readyRef.current = false
       viewRef.current = null
+      drawnMap.clear()
       view?.close()
       view?.remove()
     }
@@ -112,12 +166,29 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
     if (viewRef.current?.renderer) applySettings(viewRef.current, props.settings)
   }, [props.settings])
 
+  useEffect(() => {
+    if (readyRef.current && viewRef.current) syncHighlights(viewRef.current, props.highlights, drawn.current)
+  }, [props.highlights])
+
   return <div ref={containerRef} className="h-full w-full" data-testid="epub-view" />
 })
 
 function applySettings(view: FoliateView, settings: RendererProps['settings']) {
   view.renderer.setStyles?.(buildEpubCss(settings))
   view.renderer.setAttribute('gap', `${settings.margin}%`)
+}
+
+/** Draws new or recolored highlights and erases deleted ones. */
+function syncHighlights(view: FoliateView, highlights: Highlight[], drawn: Map<string, HighlightColor>) {
+  const next = new Map(highlights.map(h => [h.location, h.color]))
+  for (const location of drawn.keys()) {
+    if (!next.has(location)) view.deleteAnnotation({ value: location })
+  }
+  for (const [location, color] of next) {
+    if (drawn.get(location) !== color) view.addAnnotation({ value: location, color })
+  }
+  drawn.clear()
+  for (const [location, color] of next) drawn.set(location, color)
 }
 
 export default EpubView

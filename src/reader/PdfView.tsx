@@ -2,8 +2,10 @@ import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 're
 import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
 import { pdfjs } from '../lib/pdfjs'
 import type { Theme } from '../lib/db'
+import { HIGHLIGHT_COLORS } from './highlightColors'
+import { hitsRects, toPageRects } from './pdfHighlights'
 import { pageToPercent } from './pdfProgress'
-import { singleWord, tapZone } from './selection'
+import { tapZone } from './selection'
 import type { ReaderHandle, RendererProps, TocEntry } from './types'
 
 interface Props extends RendererProps {
@@ -23,6 +25,7 @@ const PAGE_FILTERS: Record<Theme, string> = {
   dark: 'invert(0.88) hue-rotate(180deg)',
 }
 const TAP_DELAY = 250
+const SELECTION_DELAY = 300
 const SWIPE_DISTANCE = 50
 
 async function resolveOutline(doc: PDFDocumentProxy, nodes: OutlineNode[]): Promise<TocEntry[]> {
@@ -73,11 +76,21 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
   const total = doc?.numPages ?? 1
   const goToPage = (n: number) => setPage(Math.min(Math.max(1, Math.round(n)), total))
 
+  const pageRef = useRef<HTMLDivElement>(null)
+  // Draw marks only once the page has been laid out.
+  const pageHighlights = pageSize.width
+    ? props.highlights.filter(h => h.location === String(page) && h.rects?.length)
+    : []
+
   useImperativeHandle(ref, () => ({
     next: () => setPage(p => Math.min(p + 1, total)),
     prev: () => setPage(p => Math.max(p - 1, 1)),
     goTo: target => goToPage(Number(target)),
     goToFraction: fraction => goToPage(1 + fraction * (total - 1)),
+    clearSelection: () => {
+      const selection = document.getSelection()
+      if (selection?.anchorNode && textLayerRef.current?.contains(selection.anchorNode)) selection.removeAllRanges()
+    },
   }))
 
   // Open the document.
@@ -170,33 +183,60 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
     }
   }, [doc, page, size, zoom])
 
-  // Single-word selections in the text layer open the dictionary.
+  // Report text selected in the text layer, with its position on the page.
+  const position = useRef({ page, toc, total })
+  position.current = { page, toc, total }
   useEffect(() => {
     let timer: number | undefined
-    const onSelection = () => {
+    let active = false
+    const onSelectionChange = () => {
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         const selection = document.getSelection()
-        if (!selection?.anchorNode || !textLayerRef.current?.contains(selection.anchorNode)) return
-        const word = singleWord(selection.toString())
-        if (word) latest.current.onSelectWord(word)
-      }, 400)
+        const inPage = !!selection?.anchorNode && !!textLayerRef.current?.contains(selection.anchorNode)
+        const text = selection?.toString().trim()
+        if (!selection || !inPage || selection.isCollapsed || !text || !pageRef.current) {
+          if (active) {
+            active = false
+            latest.current.onSelection(null)
+          }
+          return
+        }
+        const rects = toPageRects(selection.getRangeAt(0).getClientRects(), pageRef.current.getBoundingClientRect())
+        if (!rects.length) return
+        active = true
+        const { page, toc, total } = position.current
+        latest.current.onSelection({
+          text,
+          location: String(page),
+          rects,
+          percent: pageToPercent(page, total),
+          chapter: chapterFor(toc, page),
+        })
+      }, SELECTION_DELAY)
     }
-    document.addEventListener('selectionchange', onSelection)
+    document.addEventListener('selectionchange', onSelectionChange)
     return () => {
       window.clearTimeout(timer)
-      document.removeEventListener('selectionchange', onSelection)
+      document.removeEventListener('selectionchange', onSelectionChange)
     }
   }, [])
 
-  // Taps and swipes.
+  // Taps and swipes. Tapping a highlight opens it instead of turning the page.
   const tapTimer = useRef<number | undefined>(undefined)
   const swipeStart = useRef<{ x: number; y: number } | null>(null)
   const onClick = (e: React.MouseEvent) => {
-    const { clientX } = e
+    const { clientX, clientY } = e
     window.clearTimeout(tapTimer.current)
     tapTimer.current = window.setTimeout(() => {
       if (!document.getSelection()?.isCollapsed) return
+      const box = pageRef.current?.getBoundingClientRect()
+      if (box) {
+        const x = (clientX - box.left) / box.width
+        const y = (clientY - box.top) / box.height
+        const hit = pageHighlights.find(h => hitsRects(h.rects!, x, y))
+        if (hit) return latest.current.onHighlightTap(hit.id)
+      }
       const rect = scrollerRef.current!.getBoundingClientRect()
       latest.current.onTap(tapZone(clientX - rect.left, rect.width))
     }, TAP_DELAY)
@@ -227,10 +267,27 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
     >
       <div className="flex min-h-full min-w-fit items-center justify-center p-4">
         <div
-          className="relative bg-white shadow-md"
-          style={{ width: pageSize.width || undefined, height: pageSize.height || undefined, filter: PAGE_FILTERS[settings.theme] }}
+          ref={pageRef}
+          className="relative shadow-md"
+          style={{ width: pageSize.width || undefined, height: pageSize.height || undefined }}
         >
-          <canvas ref={canvasRef} className="block" />
+          {/* The theme tint applies to the page image only, so highlight colors stay true. */}
+          <canvas ref={canvasRef} className="block bg-white" style={{ filter: PAGE_FILTERS[settings.theme] }} />
+          {pageHighlights.flatMap(h => h.rects!.map((r, i) => (
+            <div
+              key={`${h.id}-${i}`}
+              data-highlight-id={h.id}
+              className="pointer-events-none absolute rounded-[2px]"
+              style={{
+                left: `${r.x * 100}%`,
+                top: `${r.y * 100}%`,
+                width: `${r.w * 100}%`,
+                height: `${r.h * 100}%`,
+                background: HIGHLIGHT_COLORS[h.color].fill,
+                opacity: 0.38,
+              }}
+            />
+          )))}
           <div ref={textLayerRef} className="textLayer" />
         </div>
       </div>

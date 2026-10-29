@@ -46,7 +46,7 @@ test('turns pages by tapping the sides and toggles toolbars in the middle', asyn
 })
 
 test('jumps to a chapter from the table of contents', async ({ page }) => {
-  await page.getByRole('button', { name: 'Contents and bookmarks' }).click()
+  await page.getByRole('button', { name: 'Contents, bookmarks and notes' }).click()
   await page.getByRole('button', { name: 'Chapter 3: The Letter' }).click()
   await expect(footer(page)).toContainText('Chapter 3: The Letter')
   await expect(page.getByRole('dialog')).toHaveCount(0)
@@ -91,12 +91,12 @@ test('adds, lists, uses and removes bookmarks', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Remove bookmark' })).toHaveAttribute('aria-pressed', 'true')
   const marked = await percent(page)
 
-  await page.getByRole('button', { name: 'Contents and bookmarks' }).click()
+  await page.getByRole('button', { name: 'Contents, bookmarks and notes' }).click()
   await page.getByRole('button', { name: 'Chapter 3: The Letter' }).click()
   await expect(footer(page)).toContainText('Chapter 3')
 
-  await page.getByRole('button', { name: 'Contents and bookmarks' }).click()
-  await page.getByRole('button', { name: /Bookmarks/ }).click()
+  await page.getByRole('button', { name: 'Contents, bookmarks and notes' }).click()
+  await page.getByRole('tab', { name: /Bookmarks/ }).click()
   await expect(page.getByRole('dialog')).toContainText('Chapter 1: The Tower')
   await page.getByRole('dialog').getByRole('button', { name: /^Chapter 1: The Tower \d+%/ }).click()
   await expect.poll(() => percent(page)).toBe(marked)
@@ -118,6 +118,7 @@ test('looks up a selected word in the dictionary', async ({ page }) => {
     doc.getSelection().removeAllRanges()
     doc.getSelection().addRange(range)
   }`)
+  await page.getByRole('toolbar', { name: 'Selected text' }).getByRole('button', { name: 'Define' }).click()
   const sheet = page.getByRole('dialog', { name: 'Definition of lamp' })
   await expect(sheet).toContainText('A test definition of lamp.')
   await expect(sheet).toContainText('noun')

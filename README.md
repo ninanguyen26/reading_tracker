@@ -16,7 +16,16 @@ A Kindle-style reader for your own EPUB and PDF books. It runs entirely in the b
 - Opens exactly where you left off
 - Table of contents (EPUB navigation or PDF outline) and a position slider
 - Bookmarks: add, list, jump to, and remove
-- Select a single word to look it up (Free Dictionary API, falling back to Wiktionary; needs a connection)
+
+**Highlights and notes**
+- Select text to get a toolbar: highlight in yellow, green, blue or pink, add a note, look up a word, or copy
+- Tap a highlight to change its color, edit its note, or delete it
+- The **Notes** tab (next to Contents and Bookmarks) lists every highlight in reading order; tap one to jump to it
+- Export a book's highlights and notes as a Markdown file
+- Works for both EPUB and PDF; PDF highlights stay aligned when you zoom
+
+**Dictionary**
+- Select a single word and tap **Define** (Free Dictionary API, falling back to Wiktionary; needs a connection)
 
 **Display**
 - White, sepia and dark themes

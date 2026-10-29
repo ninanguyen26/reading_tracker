@@ -44,7 +44,18 @@ declare module 'foliate-js/view.js' {
     prev: () => Promise<void>
     goLeft: () => Promise<void>
     goRight: () => Promise<void>
+    getCFI: (index: number, range?: Range) => string
+    addAnnotation: (annotation: { value: string; color?: string }) => Promise<unknown>
+    deleteAnnotation: (annotation: { value: string }) => Promise<unknown>
   }
 
   export function makeBook(file: File | Blob | string): Promise<FoliateBook>
+}
+
+declare module 'foliate-js/overlayer.js' {
+  type Rect = { left: number; top: number; width: number; height: number }
+  export class Overlayer {
+    static highlight(rects: Rect[], options?: { color?: string; padding?: number }): SVGElement
+    static underline(rects: Rect[], options?: { color?: string; width?: number }): SVGElement
+  }
 }

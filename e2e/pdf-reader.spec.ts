@@ -19,12 +19,12 @@ test('turns pages, follows the outline and remembers the page', async ({ page })
   await page.keyboard.press('ArrowLeft')
   await expect(footer(page)).toContainText('Page 1 of 6')
 
-  await page.getByRole('button', { name: 'Contents and bookmarks' }).click()
+  await page.getByRole('button', { name: 'Contents, bookmarks and notes' }).click()
   const toc = page.getByRole('dialog')
   await expect(toc.getByRole('listitem')).toHaveText(
     ['Introduction', 'Part One', 'Part Two', 'Part Three', 'Notes', 'Afterword'],
   )
-  await toc.getByRole('button', { name: 'Notes' }).click()
+  await toc.getByRole('listitem').getByRole('button', { name: 'Notes' }).click()
   await expect(footer(page)).toContainText('Page 5 of 6 · 80%')
   await expect(page.locator('.textLayer')).toContainText('Notes')
 
@@ -63,13 +63,13 @@ test('tints the page for sepia and dark themes', async ({ page }) => {
   await page.getByRole('button', { name: 'Reading settings' }).click()
   await expect(page.getByRole('dialog', { name: 'Reading settings' })).toContainText('original layout')
   await page.getByRole('button', { name: 'Dark' }).click()
-  const pageBox = page.locator('[data-testid="pdf-view"] canvas').locator('..')
-  await expect(pageBox).toHaveCSS('filter', /invert/)
+  await expect(page.locator('[data-testid="pdf-view"] canvas')).toHaveCSS('filter', /invert/)
 })
 
 test('looks up a word selected in the PDF text', async ({ page }) => {
   await mockDictionary(page)
   await page.locator('.textLayer span', { hasText: 'Introduction' }).first().dblclick()
+  await page.getByRole('toolbar', { name: 'Selected text' }).getByRole('button', { name: 'Define' }).click()
   await expect(page.getByRole('dialog', { name: 'Definition of Introduction' })).toContainText('A test definition')
   // The double-click selected a word; it must not also turn the page.
   await expect(footer(page)).toContainText('Page 1 of 6')

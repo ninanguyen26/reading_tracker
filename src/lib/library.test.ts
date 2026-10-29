@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { db, type Book } from './db'
 import {
-  addBook, addBookmark, deleteBook, DEFAULT_SETTINGS, filterBooks, getBookFile, getSettings,
-  markOpened, removeBookmark, saveProgress, saveSettings, sortBooks, UnsupportedFileError,
+  addBook, addBookmark, addHighlight, deleteBook, DEFAULT_SETTINGS, filterBooks, getBookFile, getSettings,
+  markOpened, removeBookmark, removeHighlight, saveProgress, saveSettings, sortBooks, sortHighlights,
+  UnsupportedFileError, updateHighlight,
 } from './library'
 
 const fakeExtract = async (file: File) => ({ title: `Title of ${file.name}`, author: 'Someone', cover: null })
@@ -72,6 +73,38 @@ describe('progress and bookmarks', () => {
     const book = await addBook(pdfFile(), fakeExtract)
     await markOpened(book.id)
     expect((await db.books.get(book.id))?.lastOpenedAt).toBeTypeOf('number')
+  })
+})
+
+describe('highlights', () => {
+  const base = { bookId: 'b', location: 'cfi', text: 'some text', color: 'yellow' as const, percent: 0.5, chapter: 'One' }
+
+  it('adds, updates and removes highlights', async () => {
+    const h = await addHighlight(base)
+    expect(h.note).toBe('')
+    await updateHighlight(h.id, { color: 'blue', note: 'remember this' })
+    const saved = await db.highlights.get(h.id)
+    expect(saved).toMatchObject({ color: 'blue', note: 'remember this' })
+    expect(saved!.updatedAt).toBeGreaterThanOrEqual(h.updatedAt)
+    await removeHighlight(h.id)
+    expect(await db.highlights.count()).toBe(0)
+  })
+
+  it('are deleted along with their book', async () => {
+    const book = await addBook(pdfFile(), fakeExtract)
+    await addHighlight({ ...base, bookId: book.id })
+    await addHighlight({ ...base, bookId: 'other' })
+    await deleteBook(book.id)
+    expect(await db.highlights.count()).toBe(1)
+  })
+
+  it('sort in reading order', () => {
+    const make = (percent: number, createdAt: number, text: string) =>
+      ({ ...base, id: text, note: '', percent, createdAt, updatedAt: createdAt, text })
+    const later = make(0.9, 1, 'later')
+    const early = make(0.1, 2, 'early')
+    const sameSpot = make(0.1, 3, 'same spot, made later')
+    expect(sortHighlights([later, sameSpot, early]).map(h => h.text)).toEqual(['early', 'same spot, made later', 'later'])
   })
 })
 

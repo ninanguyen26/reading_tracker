@@ -1,21 +1,25 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { db, type ReaderSettings } from '../lib/db'
+import { db, type Highlight, type HighlightColor, type ReaderSettings } from '../lib/db'
 import {
-  addBookmark, DEFAULT_SETTINGS, getBookFile, getSettings, markOpened, removeBookmark,
-  saveProgress, saveSettings,
+  addBookmark, addHighlight, DEFAULT_SETTINGS, getBookFile, getSettings, markOpened, removeBookmark,
+  removeHighlight, saveProgress, saveSettings, sortHighlights, updateHighlight,
 } from '../lib/library'
-import type { ReaderHandle, ReaderLocation, TocEntry } from '../reader/types'
-import NavigationPanel from '../reader/NavigationPanel'
+import { downloadNotes } from '../lib/exportNotes'
+import type { ReaderHandle, ReaderLocation, TextSelection, TocEntry } from '../reader/types'
+import NavigationPanel, { type NavigationTab } from '../reader/NavigationPanel'
 import SettingsPanel from '../reader/SettingsPanel'
 import DictionarySheet from '../reader/DictionarySheet'
+import SelectionBar from '../reader/SelectionBar'
+import HighlightSheet from '../reader/HighlightSheet'
+import { singleWord } from '../reader/selection'
 import { BackIcon, BookmarkIcon, TextIcon, TocIcon, ZoomInIcon, ZoomOutIcon } from '../components/icons'
 
 const EpubView = lazy(() => import('../reader/EpubView'))
 const PdfView = lazy(() => import('../reader/PdfView'))
 
-type Panel = 'contents' | 'bookmarks' | 'settings' | null
+type Panel = NavigationTab | 'settings' | null
 type LoadState =
   | { status: 'loading' }
   | { status: 'missing' }
@@ -30,6 +34,8 @@ export default function ReaderPage() {
     () => db.bookmarks.where('bookId').equals(bookId).sortBy('percent'),
     [bookId],
   )
+  const storedHighlights = useLiveQuery(() => db.highlights.where('bookId').equals(bookId).toArray(), [bookId])
+  const highlights = useMemo(() => sortHighlights(storedHighlights ?? []), [storedHighlights])
   const [load, setLoad] = useState<LoadState>({ status: 'loading' })
   const [settings, setSettings] = useState<ReaderSettings>(DEFAULT_SETTINGS)
   const [toc, setToc] = useState<TocEntry[]>([])
@@ -39,6 +45,9 @@ export default function ReaderPage() {
   const [panel, setPanel] = useState<Panel>(null)
   const [word, setWord] = useState<string | null>(null)
   const [zoom, setZoom] = useState(1)
+  const [selection, setSelection] = useState<TextSelection | null>(null)
+  const [editing, setEditing] = useState<{ id: string; focusNote: boolean } | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
   const readerRef = useRef<ReaderHandle>(null)
 
   // Load the file, saved position and settings once per book.
@@ -105,7 +114,56 @@ export default function ReaderPage() {
   const closeOverlays = useCallback(() => {
     setPanel(null)
     setWord(null)
+    setEditing(null)
   }, [])
+
+  useEffect(() => {
+    if (!toast) return
+    const t = window.setTimeout(() => setToast(null), 1800)
+    return () => window.clearTimeout(t)
+  }, [toast])
+
+  // ---------- Selection actions ----------
+  const finishSelection = () => {
+    readerRef.current?.clearSelection()
+    setSelection(null)
+  }
+  // Clear the selection before saving, so a new selection made while the
+  // save is in flight isn't wiped when it finishes.
+  const saveSelection = (color: HighlightColor) => {
+    if (!selection) return null
+    const { text, location, rects, percent, chapter } = selection
+    finishSelection()
+    return addHighlight({ bookId, text, location, rects, percent, chapter, color })
+  }
+  const highlightSelection = (color: HighlightColor) => {
+    saveSelection(color)
+  }
+  const noteOnSelection = async () => {
+    const h = await saveSelection('yellow')
+    if (h) setEditing({ id: h.id, focusNote: true })
+  }
+  const defineSelection = () => {
+    const w = singleWord(selection?.text)
+    finishSelection()
+    if (w) setWord(w)
+  }
+  const copySelection = async () => {
+    const text = selection?.text ?? ''
+    finishSelection()
+    try {
+      await navigator.clipboard.writeText(text)
+      setToast('Copied')
+    } catch {
+      setToast('Couldn’t copy')
+    }
+  }
+  const openHighlight = (h: Highlight) => {
+    readerRef.current?.goTo(h.location)
+    setPanel(null)
+    setEditing({ id: h.id, focusNote: false })
+  }
+  const editingHighlight = editing ? highlights.find(h => h.id === editing.id) : undefined
 
   const handleKey = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement | null
@@ -136,13 +194,13 @@ export default function ReaderPage() {
   }, [handleKey])
 
   const handleTap = useCallback((zone: 'left' | 'middle' | 'right') => {
-    if (panel || word) return closeOverlays()
+    if (panel || word || editing) return closeOverlays()
     if (zone === 'middle') return setChrome(c => !c)
     // Like a Kindle, turning the page tucks the toolbars away.
     setChrome(false)
     if (zone === 'left') readerRef.current?.prev()
     else readerRef.current?.next()
-  }, [panel, word, closeOverlays])
+  }, [panel, word, editing, closeOverlays])
 
   if (load.status === 'missing') {
     return (
@@ -158,10 +216,12 @@ export default function ReaderPage() {
     file: load.file,
     initialLocation: load.initialLocation,
     settings,
+    highlights,
     onReady: setToc,
     onError: setError,
     onRelocate: setLocation,
-    onSelectWord: setWord,
+    onSelection: setSelection,
+    onHighlightTap: (id: string) => setEditing({ id, focusNote: false }),
     onTap: handleTap,
     onKey: handleKey,
   } : null
@@ -192,7 +252,7 @@ export default function ReaderPage() {
               </button>
             </>
           )}
-          <button type="button" className={iconButton} aria-label="Contents and bookmarks" onClick={() => setPanel('contents')}>
+          <button type="button" className={iconButton} aria-label="Contents, bookmarks and notes" onClick={() => setPanel('contents')}>
             <TocIcon />
           </button>
           <button type="button" className={iconButton} aria-label="Reading settings" aria-expanded={panel === 'settings'}
@@ -245,22 +305,49 @@ export default function ReaderPage() {
         </div>
       </footer>
 
-      {(panel === 'contents' || panel === 'bookmarks') && (
+      {panel && panel !== 'settings' && (
         <NavigationPanel
           tab={panel}
           onTab={setPanel}
           toc={toc}
           bookmarks={bookmarks ?? []}
+          highlights={highlights}
           currentChapter={location?.chapter ?? null}
           onNavigate={target => { readerRef.current?.goTo(target); setPanel(null) }}
           onRemoveBookmark={removeBookmark}
+          onOpenHighlight={openHighlight}
+          onExportNotes={() => book && downloadNotes(book, highlights)}
           onClose={() => setPanel(null)}
         />
       )}
       {panel === 'settings' && (
         <SettingsPanel settings={settings} format={book?.format ?? 'epub'} onChange={updateSettings} onClose={() => setPanel(null)} />
       )}
+      {selection && !editing && !word && (
+        <SelectionBar
+          canDefine={!!singleWord(selection.text)}
+          onHighlight={highlightSelection}
+          onNote={noteOnSelection}
+          onDefine={defineSelection}
+          onCopy={copySelection}
+        />
+      )}
+      {editingHighlight && (
+        <HighlightSheet
+          highlight={editingHighlight}
+          focusNote={editing!.focusNote}
+          onColor={color => updateHighlight(editingHighlight.id, { color })}
+          onSaveNote={note => updateHighlight(editingHighlight.id, { note })}
+          onDelete={() => { removeHighlight(editingHighlight.id); setEditing(null) }}
+          onClose={() => setEditing(null)}
+        />
+      )}
       {word && <DictionarySheet word={word} onClose={() => setWord(null)} />}
+      {toast && (
+        <p role="status" className="fixed top-[calc(4rem+env(safe-area-inset-top))] left-1/2 z-50 -translate-x-1/2 rounded-full bg-[var(--reader-fg)] px-3 py-1 text-xs text-[var(--reader-bg)] shadow">
+          {toast}
+        </p>
+      )}
     </div>
   )
 }
