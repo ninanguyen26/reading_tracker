@@ -3,7 +3,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { strToU8, zipSync } from 'fflate'
 import { db } from './db'
-import { addBook, addBookmark, addHighlight, saveProgress, saveSettings, DEFAULT_SETTINGS, updateHighlight } from './library'
+import { addBook, addBookmark, addHighlight, createCollection, saveProgress, saveSettings, setBookOnShelf, DEFAULT_SETTINGS, updateHighlight } from './library'
 import { backupFileName, createBackup, InvalidBackupError, restoreBackup } from './backup'
 
 const fakeExtract = async (file: File) => ({ title: file.name, author: 'A', cover: new Blob(['img'], { type: 'image/jpeg' }) })
@@ -24,6 +24,25 @@ async function seed() {
 }
 
 describe('backup and restore', () => {
+  it('keeps shelves, merging shelf membership for books already in the library', async () => {
+    const { book } = await seed()
+    const shelf = await createCollection('Favorites')
+    await setBookOnShelf(book.id, shelf.id, true)
+    const backup = await createBackup()
+
+    await clear()
+    await restoreBackup(backup)
+    expect((await db.collections.get(shelf.id))?.name).toBe('Favorites')
+    expect((await db.books.get(book.id))?.collectionIds).toEqual([shelf.id])
+
+    // Taken off the shelf here, then the backup is restored: shelves are only added, never removed.
+    await setBookOnShelf(book.id, shelf.id, false)
+    const local = await createCollection('Local')
+    await setBookOnShelf(book.id, local.id, true)
+    await restoreBackup(backup)
+    expect((await db.books.get(book.id))?.collectionIds?.sort()).toEqual([local.id, shelf.id].sort())
+  })
+
   it('restores everything into an empty library', async () => {
     const { book, other, highlight } = await seed()
     const backup = await createBackup()

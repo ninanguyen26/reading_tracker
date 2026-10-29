@@ -9,10 +9,13 @@ A Kindle-style reader for your own EPUB and PDF books. It runs entirely in the b
 - Title, author and cover are read from the file
 - Search by title or author; sort by recently read, recently added, title or author
 - Progress bar on every book; delete with confirmation
+- **Shelves**: group books into named shelves (a book can be on several) and filter the library by shelf. Create a shelf from the shelf bar or straight from a book's ⋯ menu; rename or delete shelves (their books stay)
+- **Notes page**: every highlight and note from every book in one place, grouped by book, with search, a color filter, and **Export all** to Markdown. Tap a note to open the book at that spot
 - **Back up** the whole library (books, positions, bookmarks, highlights, notes, settings) to one `.zip` file from the ⋯ menu, and **restore** it on another device or browser. Restoring merges: books already in the library are kept, and only newer positions and notes replace older ones.
 
 **Reading**
 - Page turns with tap zones (left/right third of the screen), swipes, or the arrow keys / Page Up / Page Down / Space
+- **Scroll mode** (reading settings → Layout → Scroll) for continuous vertical reading, in both EPUBs and PDFs. Long PDFs stay fast because only pages near the screen are drawn
 - Tap the middle of the page to show or hide the toolbars
 - Opens exactly where you left off
 - Table of contents (EPUB navigation or PDF outline) and a position slider
@@ -72,7 +75,7 @@ Open http://localhost:5173.
 | `npm run preview` | Serve the production build locally |
 | `npm run lint` | ESLint |
 | `npm test` | Unit tests (Vitest) |
-| `npm run test:e2e` | End-to-end tests (Playwright, desktop and phone viewports). Uses your installed Chrome locally; run `npx playwright install chromium` if you don't have Chrome. |
+| `npm run test:e2e` | End-to-end tests (Playwright, desktop and phone viewports) against a fresh production build. Uses your installed Chrome locally; run `npx playwright install chromium` if you don't have Chrome. |
 | `npm run fixtures` | Regenerate the sample books in `tests/fixtures/` (needs the `zip` command) |
 
 ## Project layout

@@ -90,6 +90,8 @@ export interface RendererProps {
   onTap: (zone: 'left' | 'middle' | 'right') => void
   /** Key presses inside the book's own frame, forwarded to the page's shortcuts */
   onKey: (e: KeyboardEvent) => void
+  /** The reader scrolled with a wheel, trackpad or finger */
+  onUserScroll: () => void
 }
 
 export interface SearchState {

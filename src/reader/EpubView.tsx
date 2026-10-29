@@ -151,9 +151,14 @@ const EpubView = forwardRef<ReaderHandle, RendererProps>(function EpubView(props
         const file = new File([props.file], 'book.epub', { type: 'application/epub+zip' })
         await view.open(file)
         if (cancelled) return
-        view.renderer.setAttribute('flow', 'paginated')
+        // The layout engine says why the position changed; 'scroll' means the reader scrolled.
+        // (Listening for wheel events in the book's frame would stop it scrolling.)
+        view.renderer.addEventListener('relocate', e => {
+          if ((e as CustomEvent).detail?.reason === 'scroll') latest.current.onUserScroll()
+        })
         view.renderer.setAttribute('animated', '')
-        view.renderer.setAttribute('max-inline-size', '42em')
+        // Must be in px: foliate-js reads this number with parseFloat.
+        view.renderer.setAttribute('max-inline-size', '720px')
         // Leave room above and below the text for the toolbar when it slides in.
         view.renderer.setAttribute('margin', '56px')
         applySettings(view, latest.current.settings)
@@ -210,6 +215,8 @@ function toRemaining(totalLocations: number, time: { section: number; total: num
 function applySettings(view: FoliateView, settings: RendererProps['settings']) {
   view.renderer.setStyles?.(buildEpubCss(settings))
   view.renderer.setAttribute('gap', `${settings.margin}%`)
+  // foliate-js keeps the reader's place when the layout changes.
+  if (view.renderer.getAttribute('flow') !== settings.flow) view.renderer.setAttribute('flow', settings.flow)
 }
 
 /** Draws new or recolored highlights and erases deleted ones. */

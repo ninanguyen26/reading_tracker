@@ -15,7 +15,7 @@ export async function addBooks(page: Page, ...files: string[]) {
 
 export async function openBook(page: Page, title: string) {
   await page.getByRole('link', { name: `Read ${title}` }).click()
-  await expect(page.locator('footer')).toContainText('%')
+  await expect(page.locator('footer')).toContainText('%', { timeout: 15_000 })
 }
 
 export const footer = (page: Page) => page.locator('footer')

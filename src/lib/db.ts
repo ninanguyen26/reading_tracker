@@ -13,6 +13,15 @@ export interface Book {
   cover: Blob | null
   addedAt: number
   lastOpenedAt: number | null
+  /** Shelves this book is on. Missing on books added before shelves existed. */
+  collectionIds?: string[]
+}
+
+/** A shelf: a user-named group of books. A book can be on several. */
+export interface Collection {
+  id: string
+  name: string
+  createdAt: number
 }
 
 /** The book file itself, kept apart so listing the library never loads it. */
@@ -70,6 +79,8 @@ export interface Highlight {
 
 export type Theme = 'light' | 'sepia' | 'dark'
 export type FontFamily = 'original' | 'serif' | 'sans'
+/** Turn pages, or scroll continuously */
+export type Flow = 'paginated' | 'scrolled'
 
 export interface ReaderSettings {
   fontSize: number
@@ -77,6 +88,7 @@ export interface ReaderSettings {
   lineHeight: number
   margin: number
   theme: Theme
+  flow: Flow
 }
 
 type SettingsRow =
@@ -89,6 +101,7 @@ export const db = new Dexie('reading-tracker') as Dexie & {
   progress: EntityTable<Progress, 'bookId'>
   bookmarks: EntityTable<Bookmark, 'id'>
   highlights: EntityTable<Highlight, 'id'>
+  collections: EntityTable<Collection, 'id'>
   settings: EntityTable<SettingsRow, 'key'>
 }
 
@@ -102,4 +115,9 @@ db.version(1).stores({
 
 db.version(2).stores({
   highlights: 'id, bookId, createdAt',
+})
+
+db.version(3).stores({
+  books: 'id, title, author, addedAt, lastOpenedAt, *collectionIds',
+  collections: 'id, name, createdAt',
 })

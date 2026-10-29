@@ -1,4 +1,4 @@
-import { db, type Book, type Bookmark, type Highlight, type Progress, type ReaderSettings } from './db'
+import { db, type Book, type Bookmark, type Collection, type Highlight, type Progress, type ReaderSettings } from './db'
 import { detectFormat, extractMetadata, type BookMetadata } from './metadata'
 import type { BookFormat } from './db'
 import { EMPTY_STATS, type ReadingStats } from './readingSpeed'
@@ -101,6 +101,52 @@ export function sortHighlights(highlights: Highlight[]): Highlight[] {
   return [...highlights].sort((a, b) => a.percent - b.percent || a.createdAt - b.createdAt)
 }
 
+// ---------- Shelves ----------
+
+/** Creates a shelf, or returns the existing one with the same name (ignoring case). */
+export async function createCollection(name: string): Promise<Collection> {
+  const clean = name.trim().replace(/\s+/g, ' ')
+  if (!clean) throw new Error('A shelf needs a name.')
+  const existing = (await db.collections.toArray()).find(c => c.name.toLowerCase() === clean.toLowerCase())
+  if (existing) return existing
+  const collection: Collection = { id: newId(), name: clean, createdAt: Date.now() }
+  await db.collections.add(collection)
+  return collection
+}
+
+export async function renameCollection(id: string, name: string): Promise<void> {
+  const clean = name.trim().replace(/\s+/g, ' ')
+  if (clean) await db.collections.update(id, { name: clean })
+}
+
+/** Deletes a shelf. Its books stay in the library. */
+export async function deleteCollection(id: string): Promise<void> {
+  await db.transaction('rw', db.collections, db.books, async () => {
+    await db.collections.delete(id)
+    await db.books.where('collectionIds').equals(id).modify(book => {
+      book.collectionIds = (book.collectionIds ?? []).filter(c => c !== id)
+    })
+  })
+}
+
+export async function setBookOnShelf(bookId: string, collectionId: string, onShelf: boolean): Promise<void> {
+  await db.books.where('id').equals(bookId).modify(book => {
+    const ids = new Set(book.collectionIds ?? [])
+    if (onShelf) ids.add(collectionId)
+    else ids.delete(collectionId)
+    book.collectionIds = [...ids]
+  })
+}
+
+export function booksOnShelf(books: Book[], collectionId: string | null): Book[] {
+  if (!collectionId) return books
+  return books.filter(b => b.collectionIds?.includes(collectionId))
+}
+
+export function sortCollections(collections: Collection[]): Collection[] {
+  return [...collections].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
+}
+
 // ---------- Settings ----------
 
 export const DEFAULT_SETTINGS: ReaderSettings = {
@@ -109,6 +155,7 @@ export const DEFAULT_SETTINGS: ReaderSettings = {
   lineHeight: 1.5,
   margin: 6,
   theme: 'light',
+  flow: 'paginated',
 }
 
 export async function getSettings(): Promise<ReaderSettings> {

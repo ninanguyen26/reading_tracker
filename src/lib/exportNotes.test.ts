@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Highlight } from './db'
-import { buildNotesMarkdown, notesFileName } from './exportNotes'
+import { buildAllNotesMarkdown, buildNotesMarkdown, notesFileName } from './exportNotes'
 
 const h = (over: Partial<Highlight>): Highlight => ({
   id: Math.random().toString(), bookId: 'b', location: '', text: '', color: 'yellow', note: '',
@@ -26,6 +26,28 @@ describe('buildNotesMarkdown', () => {
 
   it('says when there are no highlights', () => {
     expect(buildNotesMarkdown({ title: 'T', author: 'A' }, [])).toContain('No highlights yet.')
+  })
+})
+
+describe('buildAllNotesMarkdown', () => {
+  it('puts each book with highlights under its own heading', () => {
+    const md = buildAllNotesMarkdown(
+      [{ id: 'a', title: 'Alpha', author: 'Ann' }, { id: 'b', title: 'Beta', author: 'Bo' }, { id: 'c', title: 'Empty', author: 'Cy' }],
+      [h({ bookId: 'b', text: 'From beta', chapter: 'Ch' }), h({ bookId: 'a', text: 'From alpha', note: 'n' })],
+    )
+    expect(md).toBe([
+      '# Reading notes', '',
+      '## Alpha', '', '*Ann*', '',
+      '> From alpha', '', '**Note:** n', '',
+      '## Beta', '', '*Bo*', '',
+      '### Ch', '',
+      '> From beta', '',
+    ].join('\n'))
+    expect(md).not.toContain('Empty')
+  })
+
+  it('says when there are no highlights at all', () => {
+    expect(buildAllNotesMarkdown([{ id: 'a', title: 'A', author: 'B' }], [])).toContain('No highlights yet.')
   })
 })
 

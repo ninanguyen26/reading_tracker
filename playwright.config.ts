@@ -10,6 +10,8 @@ export default defineConfig({
   use: {
     baseURL: `http://localhost:${PORT}`,
     trace: 'retain-on-failure',
+    // Requests from the page must reach page.route() mocks, not the app's service worker.
+    serviceWorkers: 'block',
   },
   projects: [
     {
@@ -22,8 +24,9 @@ export default defineConfig({
       use: { ...devices['Pixel 7'], channel: process.env.CI ? undefined : 'chrome' },
     },
   ],
+  // Test the production build, as deployed.
   webServer: {
-    command: `npm run dev -- --port ${PORT} --strictPort`,
+    command: `npm run build && npm run preview -- --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
   },

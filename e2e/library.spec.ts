@@ -40,7 +40,7 @@ test('searches and sorts the library', async ({ page }) => {
 test('deletes a book after confirming', async ({ page }) => {
   await addBooks(page, EPUB, PDF)
   await page.getByRole('button', { name: `Options for ${PDF_TITLE}` }).click()
-  await page.getByRole('button', { name: 'Delete book' }).click()
+  await page.getByRole('menuitem', { name: 'Delete book' }).click()
   await page.getByRole('button', { name: 'Delete', exact: true }).click()
   await expect(page.getByTestId('book-card')).toHaveCount(1)
   await page.reload()

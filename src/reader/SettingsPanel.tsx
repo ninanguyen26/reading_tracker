@@ -1,4 +1,4 @@
-import type { BookFormat, FontFamily, ReaderSettings, Theme } from '../lib/db'
+import type { BookFormat, Flow, FontFamily, ReaderSettings, Theme } from '../lib/db'
 import { THEME_COLORS } from './epubStyles'
 
 interface Props {
@@ -23,6 +23,10 @@ const MARGINS = [
   { value: 3, label: 'Narrow' },
   { value: 6, label: 'Normal' },
   { value: 10, label: 'Wide' },
+]
+const FLOWS: { value: Flow; label: string }[] = [
+  { value: 'paginated', label: 'Pages' },
+  { value: 'scrolled', label: 'Scroll' },
 ]
 const THEMES: { value: Theme; label: string }[] = [
   { value: 'light', label: 'White' },
@@ -54,6 +58,12 @@ export default function SettingsPanel({ settings, format, onChange, onClose }: P
             >
               {t.label}
             </button>
+          ))}
+        </Row>
+
+        <Row label="Layout">
+          {FLOWS.map(f => (
+            <Choice key={f.value} active={settings.flow === f.value} onClick={() => set('flow', f.value)}>{f.label}</Choice>
           ))}
         </Row>
 

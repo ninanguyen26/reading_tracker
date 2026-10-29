@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import Dexie from 'dexie'
 
 describe('database upgrade', () => {
-  it('keeps v1 books, progress and bookmarks when adding highlights', async () => {
+  it('keeps v1 books, progress and bookmarks through later upgrades', async () => {
     // Create the database exactly as v1 of the app did.
     const v1 = new Dexie('reading-tracker')
     v1.version(1).stores({
@@ -19,10 +19,13 @@ describe('database upgrade', () => {
 
     const { db } = await import('./db')
     await db.open()
-    expect(db.verno).toBe(2)
+    expect(db.verno).toBe(3)
     expect(await db.books.get('old')).toMatchObject({ title: 'Old Book' })
     expect(await db.progress.get('old')).toMatchObject({ percent: 0.4 })
     expect(await db.bookmarks.count()).toBe(1)
     expect(await db.highlights.count()).toBe(0)
+    expect(await db.collections.count()).toBe(0)
+    // Books from before shelves existed simply aren't on any shelf.
+    expect((await db.books.get('old'))?.collectionIds).toBeUndefined()
   })
 })

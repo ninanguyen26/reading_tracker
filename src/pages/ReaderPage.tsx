@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Highlight, type HighlightColor, type ReaderSettings } from '../lib/db'
 import {
@@ -69,6 +69,12 @@ export default function ReaderPage() {
   const searchAbort = useRef<AbortController | null>(null)
   const readerRef = useRef<ReaderHandle>(null)
 
+  // Links from the Notes page open the book at a highlight: ?at=<location>&highlight=<id>
+  const [searchParams, setSearchParams] = useSearchParams()
+  const openAt = useRef({ at: searchParams.get('at'), highlight: searchParams.get('highlight') })
+  const setParams = useRef(setSearchParams)
+  setParams.current = setSearchParams
+
   // Load the file, saved position and settings once per book.
   useEffect(() => {
     let cancelled = false
@@ -79,7 +85,11 @@ export default function ReaderPage() {
       if (cancelled) return
       if (!file) return setLoad({ status: 'missing' })
       setSettings(saved)
-      setLoad({ status: 'ready', file, initialLocation: progress?.location ?? null, settings: saved })
+      const { at, highlight } = openAt.current
+      setLoad({ status: 'ready', file, initialLocation: at ?? progress?.location ?? null, settings: saved })
+      if (highlight) setEditing({ id: highlight, focusNote: false })
+      // Consumed: don't jump back to the highlight on reload.
+      if (at || highlight) setParams.current({}, { replace: true })
       markOpened(bookId)
     })()
     return () => { cancelled = true }
@@ -252,6 +262,13 @@ export default function ReaderPage() {
     return () => window.removeEventListener('keydown', handleKey)
   }, [handleKey])
 
+  // In scroll mode there are no page turns, so scrolling tucks the toolbars away.
+  const flowRef = useRef(settings.flow)
+  flowRef.current = settings.flow
+  const handleUserScroll = useCallback(() => {
+    if (flowRef.current === 'scrolled') setChrome(false)
+  }, [])
+
   const handleTap = useCallback((zone: 'left' | 'middle' | 'right') => {
     if (panel || word || editing) return closeOverlays()
     if (zone === 'middle') return setChrome(c => !c)
@@ -271,7 +288,8 @@ export default function ReaderPage() {
   }
 
   const isPdf = book?.format === 'pdf'
-  const rendererProps = load.status === 'ready' ? {
+  // Wait for the book record too: its format decides which viewer opens the file.
+  const rendererProps = load.status === 'ready' && book ? {
     file: load.file,
     initialLocation: load.initialLocation,
     settings,
@@ -280,6 +298,7 @@ export default function ReaderPage() {
     onReady: setToc,
     onError: setError,
     onRelocate: setLocation,
+    onUserScroll: handleUserScroll,
     onSelection: setSelection,
     onHighlightTap: (id: string) => setEditing({ id, focusNote: false }),
     onTap: handleTap,

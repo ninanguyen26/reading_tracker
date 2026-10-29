@@ -32,6 +32,11 @@ export default defineConfig({
       },
     }),
   ],
+  // Pre-bundle libraries that are only imported on demand, so the dev server
+  // doesn't discover them mid-session and reload every open page.
+  optimizeDeps: {
+    include: ['fflate', 'foliate-js/view.js', 'foliate-js/overlayer.js', 'pdfjs-dist'],
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],

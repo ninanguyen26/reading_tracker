@@ -5,6 +5,7 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import LibraryPage from './pages/LibraryPage'
 import ReaderPage from './pages/ReaderPage'
+import NotesPage from './pages/NotesPage'
 
 registerSW({ immediate: true })
 
@@ -15,6 +16,7 @@ createRoot(document.getElementById('root')!).render(
       <Routes>
         <Route path="/" element={<LibraryPage />} />
         <Route path="/read/:bookId" element={<ReaderPage />} />
+        <Route path="/notes" element={<NotesPage />} />
       </Routes>
     </HashRouter>
   </StrictMode>,

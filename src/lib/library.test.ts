@@ -3,7 +3,8 @@ import { db, type Book } from './db'
 import {
   addBook, addBookmark, addHighlight, deleteBook, DEFAULT_SETTINGS, filterBooks, getBookFile, getSettings,
   markOpened, removeBookmark, removeHighlight, saveProgress, saveSettings, sortBooks, sortHighlights,
-  UnsupportedFileError, updateHighlight,
+  UnsupportedFileError, updateHighlight, createCollection, renameCollection, deleteCollection,
+  setBookOnShelf, booksOnShelf, sortCollections,
 } from './library'
 
 const fakeExtract = async (file: File) => ({ title: `Title of ${file.name}`, author: 'Someone', cover: null })
@@ -105,6 +106,48 @@ describe('highlights', () => {
     const early = make(0.1, 2, 'early')
     const sameSpot = make(0.1, 3, 'same spot, made later')
     expect(sortHighlights([later, sameSpot, early]).map(h => h.text)).toEqual(['early', 'same spot, made later', 'later'])
+  })
+})
+
+describe('shelves', () => {
+  it('creates shelves without duplicating names', async () => {
+    const a = await createCollection('  To   read ')
+    expect(a.name).toBe('To read')
+    expect((await createCollection('TO READ')).id).toBe(a.id)
+    await expect(createCollection('   ')).rejects.toThrow()
+    expect(await db.collections.count()).toBe(1)
+  })
+
+  it('puts books on shelves and takes them off', async () => {
+    const book = await addBook(pdfFile(), fakeExtract)
+    const shelf = await createCollection('Work')
+    const other = await createCollection('Fun')
+    await setBookOnShelf(book.id, shelf.id, true)
+    await setBookOnShelf(book.id, other.id, true)
+    await setBookOnShelf(book.id, shelf.id, true) // no duplicates
+    expect((await db.books.get(book.id))?.collectionIds).toEqual([shelf.id, other.id])
+    await setBookOnShelf(book.id, shelf.id, false)
+    expect((await db.books.get(book.id))?.collectionIds).toEqual([other.id])
+  })
+
+  it('renames, and deletes a shelf while keeping its books', async () => {
+    const book = await addBook(pdfFile(), fakeExtract)
+    const shelf = await createCollection('Old name')
+    await setBookOnShelf(book.id, shelf.id, true)
+    await renameCollection(shelf.id, 'New name')
+    expect((await db.collections.get(shelf.id))?.name).toBe('New name')
+    await deleteCollection(shelf.id)
+    expect(await db.collections.count()).toBe(0)
+    expect(await db.books.get(book.id)).toMatchObject({ collectionIds: [] })
+  })
+
+  it('filters and sorts', () => {
+    const b = (id: string, collectionIds?: string[]) => ({ id, collectionIds } as Book)
+    const books = [b('1', ['x']), b('2'), b('3', ['x', 'y'])]
+    expect(booksOnShelf(books, 'x').map(x => x.id)).toEqual(['1', '3'])
+    expect(booksOnShelf(books, null)).toHaveLength(3)
+    const c = (name: string) => ({ id: name, name, createdAt: 0 })
+    expect(sortCollections([c('b'), c('A'), c('c')]).map(x => x.name)).toEqual(['A', 'b', 'c'])
   })
 })
 

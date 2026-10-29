@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, type Book } from '../lib/db'
-import { addBook, deleteBook, filterBooks, sortBooks, type SortKey } from '../lib/library'
+import {
+  addBook, booksOnShelf, createCollection, deleteBook, deleteCollection, filterBooks, renameCollection,
+  setBookOnShelf, sortBooks, sortCollections, type SortKey,
+} from '../lib/library'
+import ShelfBar from '../components/ShelfBar'
 import BookCard from '../components/BookCard'
-import { CloseIcon, MoreIcon, PlusIcon, SearchIcon, UploadIcon } from '../components/icons'
+import { Link } from 'react-router-dom'
+import { CloseIcon, MoreIcon, NotebookIcon, PlusIcon, SearchIcon, UploadIcon } from '../components/icons'
 import type { RestoreSummary } from '../lib/backup'
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -13,6 +18,12 @@ const SORT_LABELS: Record<SortKey, string> = {
   author: 'Author',
 }
 const SORT_STORAGE_KEY = 'library-sort'
+
+const SHELF_STORAGE_KEY = 'library-shelf'
+
+function loadShelf(): string | null {
+  try { return localStorage.getItem(SHELF_STORAGE_KEY) } catch { return null }
+}
 
 function loadSort(): SortKey {
   try {
@@ -25,6 +36,8 @@ function loadSort(): SortKey {
 export default function LibraryPage() {
   const books = useLiveQuery(() => db.books.toArray())
   const progress = useLiveQuery(() => db.progress.toArray())
+  const collections = useLiveQuery(() => db.collections.toArray())
+  const [shelf, setShelf] = useState<string | null>(loadShelf)
   const [query, setQuery] = useState('')
   const [sort, setSort] = useState<SortKey>(loadSort)
   const [uploading, setUploading] = useState<string[]>([])
@@ -83,10 +96,35 @@ export default function LibraryPage() {
     () => new Map(progress?.map(p => [p.bookId, p.percent])),
     [progress],
   )
+  const shelves = useMemo(() => sortCollections(collections ?? []), [collections])
+  // Forget a remembered shelf that no longer exists.
+  const activeShelf = shelf && shelves.some(s => s.id === shelf) ? shelf : null
+  const shelfCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const b of books ?? []) for (const id of b.collectionIds ?? []) counts.set(id, (counts.get(id) ?? 0) + 1)
+    return counts
+  }, [books])
+  const onShelf = useMemo(() => booksOnShelf(books ?? [], activeShelf), [books, activeShelf])
   const visible = useMemo(
-    () => sortBooks(filterBooks(books ?? [], query), sort),
-    [books, query, sort],
+    () => sortBooks(filterBooks(onShelf, query), sort),
+    [onShelf, query, sort],
   )
+
+  const chooseShelf = (id: string | null) => {
+    setShelf(id)
+    try {
+      if (id) localStorage.setItem(SHELF_STORAGE_KEY, id)
+      else localStorage.removeItem(SHELF_STORAGE_KEY)
+    } catch { /* ignore */ }
+  }
+  const createShelf = async (name: string) => {
+    const created = await createCollection(name)
+    chooseShelf(created.id)
+  }
+  const createShelfFor = async (book: Book, name: string) => {
+    const created = await createCollection(name)
+    await setBookOnShelf(book.id, created.id, true)
+  }
 
   const changeSort = (key: SortKey) => {
     setSort(key)
@@ -153,8 +191,8 @@ export default function LibraryPage() {
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 py-3">
           <h1 className="mr-auto font-serif text-2xl font-semibold tracking-tight">Library</h1>
           {!empty && (
-            <>
-              <label className="relative order-last w-full sm:order-none sm:w-64">
+            <div className="order-last flex w-full items-center gap-2 sm:order-none sm:w-auto">
+              <label className="relative flex-1 sm:w-64 sm:flex-none">
                 <span className="sr-only">Search library</span>
                 <SearchIcon size={16} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-stone-400" />
                 <input
@@ -177,9 +215,15 @@ export default function LibraryPage() {
                   ))}
                 </select>
               </label>
-            </>
+            </div>
           )}
           <div className="flex items-center gap-1">
+          <Link
+            to="/notes"
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm font-medium text-stone-700 hover:bg-stone-200 dark:text-stone-200 dark:hover:bg-stone-800"
+          >
+            <NotebookIcon size={16} /> <span className="max-sm:sr-only">Notes</span>
+          </Link>
           <button
             type="button"
             onClick={openPicker}
@@ -236,6 +280,18 @@ export default function LibraryPage() {
             }}
           />
         </div>
+        {!empty && collections !== undefined && (
+          <ShelfBar
+            shelves={shelves}
+            counts={shelfCounts}
+            total={books?.length ?? 0}
+            selected={activeShelf}
+            onSelect={chooseShelf}
+            onCreate={createShelf}
+            onRename={renameCollection}
+            onDelete={id => { deleteCollection(id); chooseShelf(null) }}
+          />
+        )}
       </header>
 
       <main className="mx-auto max-w-6xl px-4 pt-6 pb-[calc(2.5rem+env(safe-area-inset-bottom))] sm:px-6">
@@ -295,13 +351,26 @@ export default function LibraryPage() {
           </p>
         )}
 
-        {!loading && !empty && visible.length === 0 && (
+        {!loading && !empty && activeShelf && onShelf.length === 0 && (
+          <p className="mt-10 text-center text-stone-500">
+            No books on this shelf yet. Use a book’s ⋯ menu to add it.
+          </p>
+        )}
+        {!loading && !empty && onShelf.length > 0 && visible.length === 0 && (
           <p className="mt-10 text-center text-stone-500">No books match “{query}”.</p>
         )}
 
         <div className="grid grid-cols-[repeat(auto-fill,minmax(8.5rem,1fr))] gap-x-5 gap-y-7 sm:grid-cols-[repeat(auto-fill,minmax(10rem,1fr))]">
           {visible.map((book: Book) => (
-            <BookCard key={book.id} book={book} percent={percentById.get(book.id)} onDelete={b => deleteBook(b.id)} />
+            <BookCard
+              key={book.id}
+              book={book}
+              percent={percentById.get(book.id)}
+              shelves={shelves}
+              onToggleShelf={(b, id, on) => setBookOnShelf(b.id, id, on)}
+              onCreateShelf={createShelfFor}
+              onDelete={b => deleteBook(b.id)}
+            />
           ))}
         </div>
       </main>

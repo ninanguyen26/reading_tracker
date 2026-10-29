@@ -1,17 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import type { Book } from '../lib/db'
+import type { Book, Collection } from '../lib/db'
 import BookCover from './BookCover'
-import { MoreIcon, TrashIcon } from './icons'
+import InlineNameForm from './InlineNameForm'
+import { MoreIcon, PlusIcon, TrashIcon } from './icons'
 
 interface Props {
   book: Book
   percent: number | undefined
+  shelves: Collection[]
+  onToggleShelf: (book: Book, shelfId: string, onShelf: boolean) => void
+  /** Creates a shelf and puts this book on it */
+  onCreateShelf: (book: Book, name: string) => void
   onDelete: (book: Book) => void
 }
 
-export default function BookCard({ book, percent, onDelete }: Props) {
-  const [menu, setMenu] = useState<'closed' | 'open' | 'confirm'>('closed')
+export default function BookCard({ book, percent, shelves, onToggleShelf, onCreateShelf, onDelete }: Props) {
+  const [menu, setMenu] = useState<'closed' | 'open' | 'new-shelf' | 'confirm'>('closed')
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -19,8 +24,13 @@ export default function BookCard({ book, percent, onDelete }: Props) {
     const close = (e: PointerEvent) => {
       if (!menuRef.current?.contains(e.target as Node)) setMenu('closed')
     }
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setMenu('closed')
     document.addEventListener('pointerdown', close)
-    return () => document.removeEventListener('pointerdown', close)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', close)
+      document.removeEventListener('keydown', onKey)
+    }
   }, [menu])
 
   const started = percent !== undefined && percent > 0
@@ -57,19 +67,56 @@ export default function BookCard({ book, percent, onDelete }: Props) {
             <MoreIcon size={18} />
           </button>
           {menu !== 'closed' && (
-            <div className="absolute right-0 bottom-full z-20 mb-1 w-52 rounded-lg border border-stone-200 bg-white p-1.5 text-sm shadow-lg dark:border-stone-700 dark:bg-stone-900">
-              {menu === 'open' ? (
-                <button
-                  type="button"
-                  onClick={() => setMenu('confirm')}
-                  className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
-                >
-                  <TrashIcon size={16} /> Delete book
-                </button>
+            <div role="menu" aria-label={`Options for ${book.title}`} className="absolute top-full right-0 z-20 mt-1 max-h-80 w-56 overflow-y-auto rounded-lg border border-stone-200 bg-white p-1.5 text-sm shadow-lg dark:border-stone-700 dark:bg-stone-900">
+              {menu === 'open' || menu === 'new-shelf' ? (
+                <>
+                  <p className="px-2 pt-0.5 pb-1 text-xs font-medium tracking-wide text-stone-500 uppercase">Shelves</p>
+                  {shelves.map(shelf => {
+                    const on = !!book.collectionIds?.includes(shelf.id)
+                    return (
+                      <button
+                        key={shelf.id}
+                        type="button"
+                        role="menuitemcheckbox"
+                        aria-checked={on}
+                        onClick={() => onToggleShelf(book, shelf.id, !on)}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-stone-100 dark:hover:bg-stone-800"
+                      >
+                        <span className={`flex size-4 items-center justify-center rounded border text-[10px] ${on ? 'border-amber-600 bg-amber-600 text-white' : 'border-stone-400'}`}>
+                          {on ? '✓' : ''}
+                        </span>
+                        <span className="truncate">{shelf.name}</span>
+                      </button>
+                    )
+                  })}
+                  {menu === 'new-shelf' ? (
+                    <InlineNameForm
+                      className="px-1 py-1"
+                      placeholder="Shelf name"
+                      label="New shelf name"
+                      onSubmit={name => { onCreateShelf(book, name); setMenu('open') }}
+                      onCancel={() => setMenu('open')}
+                    />
+                  ) : (
+                    <button type="button" role="menuitem" onClick={() => setMenu('new-shelf')}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-stone-600 hover:bg-stone-100 dark:text-stone-300 dark:hover:bg-stone-800">
+                      <PlusIcon size={16} /> New shelf…
+                    </button>
+                  )}
+                  <div className="my-1 border-t border-stone-200 dark:border-stone-700" />
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => setMenu('confirm')}
+                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950"
+                  >
+                    <TrashIcon size={16} /> Delete book
+                  </button>
+                </>
               ) : (
                 <div className="p-1">
                   <p className="mb-2 text-stone-700 dark:text-stone-300">
-                    Delete this book, its progress and bookmarks?
+                    Delete this book with its progress, bookmarks and highlights?
                   </p>
                   <div className="flex justify-end gap-1.5">
                     <button type="button" onClick={() => setMenu('closed')} className="rounded px-2 py-1 hover:bg-stone-100 dark:hover:bg-stone-800">

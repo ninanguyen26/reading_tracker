@@ -1,0 +1,42 @@
+// Not a test: captures screenshots of shelves, the Notes page and scroll mode for manual review.
+import { test } from '@playwright/test'
+import { addBooks, EPUB, EPUB_TITLE, openBook, PDF, PDF_TITLE, selectInEpub } from './helpers'
+
+const dir = process.env.SHOTS_DIR ?? 'test-results/shots'
+
+test('capture v4 screens', async ({ page }, info) => {
+  const shot = (name: string) => page.screenshot({ path: `${dir}/${info.project.name}-${name}.png` })
+  await addBooks(page, EPUB, PDF)
+  await page.getByRole('button', { name: `Options for ${EPUB_TITLE}` }).click()
+  await page.getByRole('menuitem', { name: 'New shelf…' }).click()
+  await page.getByRole('textbox', { name: 'New shelf name' }).fill('Favorites')
+  await page.keyboard.press('Enter')
+  await shot('30-book-menu-shelves')
+  await page.keyboard.press('Escape')
+  await page.getByRole('button', { name: 'New shelf' }).click()
+  await page.getByRole('textbox', { name: 'New shelf name' }).fill('To read')
+  await page.keyboard.press('Enter')
+  await page.getByRole('tab', { name: /^Favorites/ }).click()
+  await shot('31-shelf-filter')
+  await page.getByRole('tab', { name: /^All books/ }).click()
+  await openBook(page, EPUB_TITLE)
+  await selectInEpub(page, 'the logbook')
+  await page.getByRole('toolbar', { name: 'Selected text' }).getByRole('button', { name: 'Note' }).click()
+  await page.getByPlaceholder('Add a note…').fill('A daily record')
+  await page.getByRole('button', { name: 'Save' }).click()
+  await selectInEpub(page, 'counted the seconds')
+  await page.getByRole('toolbar', { name: 'Selected text' }).getByRole('button', { name: 'Highlight green' }).click()
+  await page.getByRole('link', { name: 'Back to library' }).click()
+  await page.getByRole('link', { name: 'Notes', exact: true }).click()
+  await page.getByText(/highlights in/).waitFor()
+  await shot('32-notes-page')
+  await page.getByRole('link', { name: 'Back to library' }).click()
+  await openBook(page, PDF_TITLE)
+  await page.getByRole('button', { name: 'Reading settings' }).click()
+  await page.getByRole('button', { name: 'Scroll', exact: true }).click()
+  await shot('33-settings-layout')
+  await page.keyboard.press('Escape')
+  await page.mouse.wheel(0, 700)
+  await page.waitForTimeout(800)
+  await shot('34-pdf-scroll')
+})

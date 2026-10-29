@@ -1,5 +1,5 @@
 import { strFromU8, strToU8, unzipSync, zipSync, type Zippable } from 'fflate'
-import { db, type Book, type Bookmark, type Highlight, type Progress, type ReaderSettings } from './db'
+import { db, type Book, type Bookmark, type Collection, type Highlight, type Progress, type ReaderSettings } from './db'
 import type { ReadingStats } from './readingSpeed'
 
 /**
@@ -25,6 +25,8 @@ interface Manifest {
   progress: Progress[]
   bookmarks: Bookmark[]
   highlights: Highlight[]
+  /** Added after the first backup format; older backups have none. */
+  collections?: Collection[]
   settings?: ReaderSettings
   readingStats?: ReadingStats
 }
@@ -46,9 +48,9 @@ export class InvalidBackupError extends Error {
 const bytes = async (blob: Blob) => new Uint8Array(await blob.arrayBuffer())
 
 export async function createBackup(): Promise<Blob> {
-  const [books, files, progress, bookmarks, highlights, settings, stats] = await Promise.all([
+  const [books, files, progress, bookmarks, highlights, collections, settings, stats] = await Promise.all([
     db.books.toArray(), db.files.toArray(), db.progress.toArray(), db.bookmarks.toArray(),
-    db.highlights.toArray(), db.settings.get('reader'), db.settings.get('reading-stats'),
+    db.highlights.toArray(), db.collections.toArray(), db.settings.get('reader'), db.settings.get('reading-stats'),
   ])
   const fileById = new Map(files.map(f => [f.bookId, f.blob]))
   // Books and covers are already compressed, so store them as-is: much faster, barely bigger.
@@ -69,6 +71,7 @@ export async function createBackup(): Promise<Blob> {
     progress,
     bookmarks,
     highlights,
+    collections,
     settings: settings?.key === 'reader' ? settings.value : undefined,
     readingStats: stats?.key === 'reading-stats' ? stats.value : undefined,
   }
@@ -105,11 +108,18 @@ export async function restoreBackup(file: Blob): Promise<RestoreSummary> {
   const manifest = readManifest(entries)
   const summary: RestoreSummary = { booksAdded: 0, booksSkipped: 0, highlightsAdded: 0, bookmarksAdded: 0 }
 
-  await db.transaction('rw', [db.books, db.files, db.progress, db.bookmarks, db.highlights, db.settings], async () => {
+  await db.transaction('rw', [db.books, db.files, db.progress, db.bookmarks, db.highlights, db.collections, db.settings], async () => {
+    for (const c of manifest.collections ?? []) {
+      if (!(await db.collections.get(c.id))) await db.collections.add(c)
+    }
     for (const { fileType, coverType, ...book } of manifest.books) {
       const data = entries[`files/${book.id}`]
       if (!data) continue
-      if (await db.books.get(book.id)) {
+      const existing = await db.books.get(book.id)
+      if (existing) {
+        // Keep the book, but add it to any shelves it was on in the backup.
+        const shelves = new Set([...(existing.collectionIds ?? []), ...(book.collectionIds ?? [])])
+        if (shelves.size !== (existing.collectionIds ?? []).length) await db.books.update(book.id, { collectionIds: [...shelves] })
         summary.booksSkipped++
         continue
       }

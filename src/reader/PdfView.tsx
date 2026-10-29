@@ -1,11 +1,11 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
-import type { PDFDocumentProxy, RenderTask } from 'pdfjs-dist'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import type { PDFDocumentProxy } from 'pdfjs-dist'
 import { pdfjs } from '../lib/pdfjs'
-import type { Theme } from '../lib/db'
-import { HIGHLIGHT_COLORS } from './highlightColors'
+import type { Highlight } from '../lib/db'
+import PdfPage, { type PageSize } from './PdfPage'
 import { hitsRects, toPageRects } from './pdfHighlights'
 import { pageToPercent } from './pdfProgress'
-import { containsQuery, findMatches } from './textSearch'
+import { findMatches } from './textSearch'
 import { tapZone } from './selection'
 import type { ReaderHandle, RendererProps, TocEntry } from './types'
 
@@ -19,15 +19,15 @@ interface OutlineNode {
   items: OutlineNode[]
 }
 
-// PDFs can't be restyled, so themes are approximated with a filter over the page image.
-const PAGE_FILTERS: Record<Theme, string> = {
-  light: 'none',
-  sepia: 'sepia(0.35) brightness(0.97)',
-  dark: 'invert(0.88) hue-rotate(180deg)',
-}
 const TAP_DELAY = 250
 const SELECTION_DELAY = 300
 const SWIPE_DISTANCE = 50
+const PADDING = 16
+// In scroll mode pages fill the width, up to a comfortable reading size.
+const MAX_SCROLL_PAGE_WIDTH = 900
+// Pages within this distance of the screen are drawn in scroll mode.
+const RENDER_MARGIN = '100% 0px'
+const NO_HIGHLIGHTS: Highlight[] = []
 
 async function resolveOutline(doc: PDFDocumentProxy, nodes: OutlineNode[]): Promise<TocEntry[]> {
   const entries: TocEntry[] = []
@@ -74,38 +74,50 @@ function chapterFor(toc: TocEntry[], page: number): string | null {
   return found
 }
 
+/** The page element (marked with data-page) containing a node, if any. */
+const pageElementOf = (node: Node | null) =>
+  (node instanceof Element ? node : node?.parentElement)?.closest<HTMLElement>('[data-page]') ?? null
+
 const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
-  const { file, initialLocation, settings, zoom } = props
+  const { file, initialLocation, settings, zoom, highlights } = props
+  const scrolled = settings.flow === 'scrolled'
   const latest = useRef(props)
   latest.current = props
 
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const textLayerRef = useRef<HTMLDivElement>(null)
   const [doc, setDoc] = useState<PDFDocumentProxy | null>(null)
   const [toc, setToc] = useState<TocEntry[]>([])
   const [page, setPage] = useState(1)
   const [size, setSize] = useState({ width: 0, height: 0 })
-  const [pageSize, setPageSize] = useState({ width: 0, height: 0 })
-  const [textLayerVersion, setTextLayerVersion] = useState(0)
+  // Page sizes in PDF units. Pages not yet seen are assumed to match page 1.
+  const [baseSizes, setBaseSizes] = useState<Map<number, PageSize>>(new Map())
+  // Scroll mode: pages near the screen, which get drawn.
+  const [nearby, setNearby] = useState<Set<number>>(new Set())
+  // Scroll mode: a page to bring into view once it's laid out.
+  const scrollTarget = useRef<number | null>(null)
 
   const total = doc?.numPages ?? 1
-  const goToPage = (n: number) => setPage(Math.min(Math.max(1, Math.round(n)), total))
+  const clampPage = useCallback((n: number) => Math.min(Math.max(1, Math.round(n)), total), [total])
+  const sizeOf = (n: number) => baseSizes.get(n) ?? baseSizes.get(1) ?? { width: 612, height: 792 }
 
-  const pageRef = useRef<HTMLDivElement>(null)
-  // Draw marks only once the page has been laid out.
-  const pageHighlights = pageSize.width
-    ? props.highlights.filter(h => h.location === String(page) && h.rects?.length)
-    : []
+  const goToPage = (n: number) => {
+    const target = clampPage(n)
+    if (scrolled) scrollTarget.current = target
+    setPage(target)
+  }
+  const scrollByScreen = (direction: 1 | -1) => {
+    const el = scrollerRef.current
+    if (el) el.scrollBy({ top: direction * el.clientHeight * 0.9 })
+  }
 
   useImperativeHandle(ref, () => ({
-    next: () => setPage(p => Math.min(p + 1, total)),
-    prev: () => setPage(p => Math.max(p - 1, 1)),
+    next: () => (scrolled ? scrollByScreen(1) : setPage(p => clampPage(p + 1))),
+    prev: () => (scrolled ? scrollByScreen(-1) : setPage(p => clampPage(p - 1))),
     goTo: target => goToPage(Number(target)),
     goToFraction: fraction => goToPage(1 + fraction * (total - 1)),
     clearSelection: () => {
       const selection = document.getSelection()
-      if (selection?.anchorNode && textLayerRef.current?.contains(selection.anchorNode)) selection.removeAllRanges()
+      if (selection?.anchorNode && scrollerRef.current?.contains(selection.anchorNode)) selection.removeAllRanges()
     },
     search: async (query, { onProgress, onGroup }, signal) => {
       if (!doc) return
@@ -146,10 +158,14 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       try {
         opened = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise
         if (cancelled) return opened.destroy()
+        const first = (await opened.getPage(1)).getViewport({ scale: 1 })
         const outline = await resolveOutline(opened, ((await opened.getOutline()) ?? []) as OutlineNode[])
         if (cancelled) return
         const start = Number(initialLocation)
-        setPage(Number.isInteger(start) && start >= 1 && start <= opened.numPages ? start : 1)
+        const startPage = Number.isInteger(start) && start >= 1 && start <= opened.numPages ? start : 1
+        scrollTarget.current = startPage
+        setBaseSizes(new Map([[1, { width: first.width, height: first.height }]]))
+        setPage(startPage)
         setToc(outline)
         setDoc(opened)
         latest.current.onReady(outline)
@@ -177,6 +193,18 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
     return () => observer.disconnect()
   }, [])
 
+  const onMeasure = useCallback((n: number, measured: PageSize) => {
+    setBaseSizes(prev => new Map(prev).set(n, measured))
+  }, [])
+
+  // CSS pixels per PDF unit for a page of the given size.
+  const scaleFor = (base: PageSize) => {
+    const width = size.width - PADDING * 2
+    const height = size.height - PADDING * 2
+    if (scrolled) return (Math.min(width, MAX_SCROLL_PAGE_WIDTH) / base.width) * zoom
+    return Math.min(width / base.width, height / base.height) * zoom
+  }
+
   // Report the new position whenever the page changes.
   useEffect(() => {
     if (!doc) return
@@ -193,60 +221,91 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
         position: page,
       },
     })
-    scrollerRef.current?.scrollTo({ top: 0, left: 0 })
-  }, [doc, page, toc])
+    if (!scrolled) scrollerRef.current?.scrollTo({ top: 0, left: 0 })
+  }, [doc, page, toc, scrolled])
 
-  // Draw the page and its selectable text layer.
+  // Scroll mode: keep the current page in view when switching modes or zooming.
   useEffect(() => {
-    if (!doc || !size.width || !size.height) return
-    let cancelled = false
-    let task: RenderTask | null = null
-    let textLayer: InstanceType<typeof pdfjs.TextLayer> | null = null
-    ;(async () => {
-      const pdfPage = await doc.getPage(page)
-      if (cancelled) return
-      const base = pdfPage.getViewport({ scale: 1 })
-      const pad = 16
-      const fit = Math.min((size.width - pad * 2) / base.width, (size.height - pad * 2) / base.height)
-      const viewport = pdfPage.getViewport({ scale: fit * zoom })
-      const ratio = window.devicePixelRatio || 1
+    if (scrolled) scrollTarget.current ??= page
+    // Only when the layout changes, not on every page change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrolled, zoom])
 
-      const canvas = canvasRef.current!
-      canvas.width = Math.floor(viewport.width * ratio)
-      canvas.height = Math.floor(viewport.height * ratio)
-      canvas.style.width = `${Math.floor(viewport.width)}px`
-      canvas.style.height = `${Math.floor(viewport.height)}px`
-      setPageSize({ width: Math.floor(viewport.width), height: Math.floor(viewport.height) })
+  // Scroll mode: bring a requested page into view once the layout is ready.
+  useEffect(() => {
+    const target = scrollTarget.current
+    if (!scrolled || !doc || !size.width || target === null) return
+    const el = scrollerRef.current?.querySelector<HTMLElement>(`[data-page="${target}"]`)
+    if (!el) return
+    scrollTarget.current = null
+    scrollerRef.current!.scrollTop = el.offsetTop - PADDING
+  })
 
-      task = pdfPage.render({ canvas, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : undefined })
-      await task.promise.catch(() => {})
-      if (cancelled) return
+  const ready = !!doc && size.width > 0
 
-      const container = textLayerRef.current!
-      container.replaceChildren()
-      container.style.setProperty('--total-scale-factor', String(viewport.scale))
-      textLayer = new pdfjs.TextLayer({ textContentSource: pdfPage.streamTextContent(), container, viewport })
-      await textLayer.render().catch(() => {})
-      if (!cancelled) setTextLayerVersion(v => v + 1)
-    })()
+  // Scroll mode: work out which pages are near the screen, and which one is current.
+  useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scrolled || !ready || !scroller) {
+      setNearby(new Set())
+      return
+    }
+    const observer = new IntersectionObserver(entries => {
+      setNearby(prev => {
+        const next = new Set(prev)
+        for (const entry of entries) {
+          const n = Number((entry.target as HTMLElement).dataset.page)
+          if (entry.isIntersecting) next.add(n)
+          else next.delete(n)
+        }
+        return next
+      })
+    }, { root: scroller, rootMargin: RENDER_MARGIN })
+    for (const el of scroller.querySelectorAll('[data-page]')) observer.observe(el)
+
+    // The current page is the one crossing a line a third of the way down the screen.
+    let frame = 0
+    const onScroll = () => {
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        if (scrollTarget.current !== null) return
+        // The last page may be too short to reach the line, so the very bottom counts as the end.
+        if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) {
+          setPage(total)
+          return
+        }
+        const line = scroller.getBoundingClientRect().top + scroller.clientHeight / 3
+        for (const el of scroller.querySelectorAll<HTMLElement>('[data-page]')) {
+          const rect = el.getBoundingClientRect()
+          if (rect.bottom >= line) {
+            setPage(Number(el.dataset.page))
+            break
+          }
+        }
+      })
+    }
+    scroller.addEventListener('scroll', onScroll, { passive: true })
     return () => {
-      cancelled = true
-      task?.cancel()
-      textLayer?.cancel()
+      observer.disconnect()
+      cancelAnimationFrame(frame)
+      scroller.removeEventListener('scroll', onScroll)
     }
-  }, [doc, page, size, zoom])
+  }, [scrolled, ready, total])
 
-  // Mark text-layer pieces that contain the search query.
-  useEffect(() => {
-    const spans = textLayerRef.current?.querySelectorAll<HTMLElement>('span:not(.markedContent)') ?? []
-    for (const span of spans) {
-      span.classList.toggle('search-hit', containsQuery(span.textContent ?? '', props.searchQuery))
+  // Highlights grouped by page, so each page only re-renders when its own change.
+  const highlightsByPage = useMemo(() => {
+    const map = new Map<number, Highlight[]>()
+    for (const h of highlights) {
+      if (!h.rects?.length) continue
+      const n = Number(h.location)
+      map.set(n, [...(map.get(n) ?? []), h])
     }
-  }, [props.searchQuery, textLayerVersion])
+    return map
+  }, [highlights])
 
-  // Report text selected in the text layer, with its position on the page.
-  const position = useRef({ page, toc, total })
-  position.current = { page, toc, total }
+  // Report text selected in a page's text layer, with its position on that page.
+  const position = useRef({ toc, total })
+  position.current = { toc, total }
   useEffect(() => {
     let timer: number | undefined
     let active = false
@@ -254,25 +313,27 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       window.clearTimeout(timer)
       timer = window.setTimeout(() => {
         const selection = document.getSelection()
-        const inPage = !!selection?.anchorNode && !!textLayerRef.current?.contains(selection.anchorNode)
+        const pageEl = pageElementOf(selection?.anchorNode ?? null)
+        const inReader = !!pageEl && !!scrollerRef.current?.contains(pageEl)
         const text = selection?.toString().trim()
-        if (!selection || !inPage || selection.isCollapsed || !text || !pageRef.current) {
+        if (!selection || !inReader || selection.isCollapsed || !text) {
           if (active) {
             active = false
             latest.current.onSelection(null)
           }
           return
         }
-        const rects = toPageRects(selection.getRangeAt(0).getClientRects(), pageRef.current.getBoundingClientRect())
+        const rects = toPageRects(selection.getRangeAt(0).getClientRects(), pageEl!.getBoundingClientRect())
         if (!rects.length) return
         active = true
-        const { page, toc, total } = position.current
+        const n = Number(pageEl!.dataset.page)
+        const { toc, total } = position.current
         latest.current.onSelection({
           text,
-          location: String(page),
+          location: String(n),
           rects,
-          percent: pageToPercent(page, total),
-          chapter: chapterFor(toc, page),
+          percent: pageToPercent(n, total),
+          chapter: chapterFor(toc, n),
         })
       }, SELECTION_DELAY)
     }
@@ -288,14 +349,15 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
   const swipeStart = useRef<{ x: number; y: number } | null>(null)
   const onClick = (e: React.MouseEvent) => {
     const { clientX, clientY } = e
+    const pageEl = pageElementOf(e.target as Node)
     window.clearTimeout(tapTimer.current)
     tapTimer.current = window.setTimeout(() => {
       if (!document.getSelection()?.isCollapsed) return
-      const box = pageRef.current?.getBoundingClientRect()
-      if (box) {
+      if (pageEl) {
+        const box = pageEl.getBoundingClientRect()
         const x = (clientX - box.left) / box.width
         const y = (clientY - box.top) / box.height
-        const hit = pageHighlights.find(h => hitsRects(h.rects!, x, y))
+        const hit = highlightsByPage.get(Number(pageEl.dataset.page))?.find(h => hitsRects(h.rects!, x, y))
         if (hit) return latest.current.onHighlightTap(hit.id)
       }
       const rect = scrollerRef.current!.getBoundingClientRect()
@@ -303,7 +365,7 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
     }, TAP_DELAY)
   }
   const onPointerDown = (e: React.PointerEvent) => {
-    swipeStart.current = e.pointerType === 'touch' && zoom === 1 ? { x: e.clientX, y: e.clientY } : null
+    swipeStart.current = e.pointerType === 'touch' && zoom === 1 && !scrolled ? { x: e.clientX, y: e.clientY } : null
   }
   const onPointerUp = (e: React.PointerEvent) => {
     const start = swipeStart.current
@@ -313,7 +375,25 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
     const dy = e.clientY - start.y
     if (Math.abs(dx) < SWIPE_DISTANCE || Math.abs(dy) > Math.abs(dx)) return
     window.clearTimeout(tapTimer.current)
-    setPage(p => (dx < 0 ? Math.min(p + 1, total) : Math.max(p - 1, 1)))
+    setPage(p => clampPage(dx < 0 ? p + 1 : p - 1))
+  }
+
+  const renderPage = (n: number, active: boolean) => {
+    const base = sizeOf(n)
+    return (
+      <PdfPage
+        key={n}
+        doc={doc!}
+        pageNumber={n}
+        baseSize={base}
+        scale={scaleFor(base)}
+        active={active}
+        theme={settings.theme}
+        highlights={highlightsByPage.get(n) ?? NO_HIGHLIGHTS}
+        searchQuery={props.searchQuery}
+        onMeasure={onMeasure}
+      />
+    )
   }
 
   return (
@@ -324,34 +404,20 @@ const PdfView = forwardRef<ReaderHandle, Props>(function PdfView(props, ref) {
       onDoubleClick={() => window.clearTimeout(tapTimer.current)}
       onPointerDown={onPointerDown}
       onPointerUp={onPointerUp}
+      onWheel={() => latest.current.onUserScroll()}
+      onTouchMove={() => latest.current.onUserScroll()}
       data-testid="pdf-view"
+      data-flow={settings.flow}
     >
-      <div className="flex min-h-full min-w-fit items-center justify-center p-4">
-        <div
-          ref={pageRef}
-          className="relative shadow-md"
-          style={{ width: pageSize.width || undefined, height: pageSize.height || undefined }}
-        >
-          {/* The theme tint applies to the page image only, so highlight colors stay true. */}
-          <canvas ref={canvasRef} className="block bg-white" style={{ filter: PAGE_FILTERS[settings.theme] }} />
-          {pageHighlights.flatMap(h => h.rects!.map((r, i) => (
-            <div
-              key={`${h.id}-${i}`}
-              data-highlight-id={h.id}
-              className="pointer-events-none absolute rounded-[2px]"
-              style={{
-                left: `${r.x * 100}%`,
-                top: `${r.y * 100}%`,
-                width: `${r.w * 100}%`,
-                height: `${r.h * 100}%`,
-                background: HIGHLIGHT_COLORS[h.color].fill,
-                opacity: 0.38,
-              }}
-            />
-          )))}
-          <div ref={textLayerRef} className="textLayer" />
+      {ready && (scrolled ? (
+        <div className="flex min-w-fit flex-col items-center gap-3" style={{ padding: PADDING }}>
+          {Array.from({ length: total }, (_, i) => renderPage(i + 1, nearby.has(i + 1)))}
         </div>
-      </div>
+      ) : (
+        <div className="flex min-h-full min-w-fit items-center justify-center" style={{ padding: PADDING }}>
+          {renderPage(page, true)}
+        </div>
+      ))}
     </div>
   )
 })
